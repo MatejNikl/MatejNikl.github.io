@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Achromatopsia Simulator (Debug 2)</title>
+  <title>Achromatopsia Simulator</title>
   <style>
     body, html {
       margin: 0;
@@ -21,66 +21,90 @@
       object-fit: cover;
       filter: grayscale(100%);
     }
-    #metadata {
+    #overlay {
       position: absolute;
-      bottom: 10px;
-      left: 10px;
-      right: 10px;
-      background: rgba(0, 0, 0, 0.8);
-      padding: 8px;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: white;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.1s;
+    }
+    #controls {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.5);
+      padding: 8px 12px;
       border-radius: 4px;
-      font-size: 12px;
-      max-height: 40%;
-      overflow-y: auto;
-      white-space: pre-wrap;
       z-index: 2;
+      display: flex;
+      align-items: center;
+      font-size: 14px;
+    }
+    #controls label {
+      margin-right: 8px;
+    }
+    #controls input[type=range] {
+      flex: 1;
+    }
+    #sampleCanvas {
+      display: none;
     }
   </style>
 </head>
 <body>
-  <video id="video" autoplay playsinline aria-label="Live video feed"></video>
-  <div id="metadata">Loading camera metadata...</div>
+  <video id="video" autoplay playsinline></video>
+  <div id="overlay"></div>
+  <div id="controls">
+    <label for="thresholdSlider">Light Threshold:</label>
+    <input id="thresholdSlider" type="range" min="0" max="255" value="180" />
+  </div>
+  <canvas id="sampleCanvas" width="160" height="120"></canvas>
 
   <script>
-    let imageCapture, track;
-    const metadataEl = document.getElementById('metadata');
+    const video = document.getElementById('video');
+    const overlay = document.getElementById('overlay');
+    const thresholdSlider = document.getElementById('thresholdSlider');
+    const sampleCanvas = document.getElementById('sampleCanvas');
+    const sampleCtx = sampleCanvas.getContext('2d');
 
     async function startCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
-        document.getElementById('video').srcObject = stream;
-        [track] = stream.getVideoTracks();
-
-        if ('ImageCapture' in window) {
-          imageCapture = new ImageCapture(track);
-          startMetadataLoop();
-        } else {
-          metadataEl.textContent = 'ImageCapture API not supported';
-        }
+        video.srcObject = stream;
+        video.addEventListener('loadedmetadata', () => {
+          video.play();
+          requestAnimationFrame(processFrame);
+        });
       } catch (err) {
-        metadataEl.textContent = 'Camera error: ' + err.message;
+        console.error('Camera error:', err);
       }
     }
 
-    async function updateMetadata() {
-      if (!imageCapture) return;
-      try {
-        const settings = await imageCapture.getPhotoSettings();
-        const capabilities = await imageCapture.getPhotoCapabilities();
-        const trackSettings = track.getSettings();
-
-        metadataEl.textContent =
-          'PhotoSettings: ' + JSON.stringify(settings, null, 2) + '\n' +
-          'PhotoCapabilities: ' + JSON.stringify(capabilities, null, 2) + '\n' +
-          'TrackSettings: ' + JSON.stringify(trackSettings, null, 2);
-      } catch (e) {
-        metadataEl.textContent = 'Metadata unavailable';
+    function processFrame() {
+      sampleCtx.drawImage(video, 0, 0, sampleCanvas.width, sampleCanvas.height);
+      const imageData = sampleCtx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height);
+      const data = imageData.data;
+      let total = 0;
+      for (let i = 0; i < data.length; i += 16) {
+        total += (data[i] + data[i+1] + data[i+2]) / 3;
       }
-    }
+      const count = data.length / 16;
+      const avgBrightness = total / count;
 
-    function startMetadataLoop() {
-      updateMetadata();
-      setInterval(updateMetadata, 2000);
+      const threshold = +thresholdSlider.value;
+      if (avgBrightness > threshold) {
+        const excess = Math.min(avgBrightness - threshold, 255 - threshold);
+        overlay.style.opacity = (excess / (255 - threshold)).toFixed(2);
+      } else {
+        overlay.style.opacity = 0;
+      }
+
+      requestAnimationFrame(processFrame);
     }
 
     startCamera();
