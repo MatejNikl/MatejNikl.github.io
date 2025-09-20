@@ -51,80 +51,104 @@
       height: 100%;
       object-fit: contain;
       display: block;
+      filter: grayscale(100%); /* Apply grayscale via CSS for efficiency */
     }
-    #error { position: absolute; top: 10px; left: 10px; color: red; background: white; padding: 5px; }
+    #error {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: red;
+      background: white;
+      padding: 5px;
+      font-size: 14px;
+      max-width: 90%;
+      aria-live: "assertive";
+    }
   </style>
 </head>
 <body>
   <video id="video" autoplay playsinline></video>
   <canvas id="canvas"></canvas>
-  <div id="error"></div>
+  <div id="error" role="alert"></div>
   <script>
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
-    const errorDiv = document.getElementById('error');
+    // Core simulator logic
+    const simulator = {
+      video: document.getElementById('video'),
+      canvas: document.getElementById('canvas'),
+      errorDiv: document.getElementById('error'),
+      stream: null,
+      rafId: null,
 
-    // Start camera
-    async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        video.srcObject = stream;
-        video.onloadedmetadata = () => {
-          // Set canvas pixel dimensions to match scaled display size
-          updateCanvasSize();
-          errorDiv.textContent = '';
-          processFrame();
-        };
-      } catch (err) {
-        errorDiv.textContent = `Error: ${err.message}. Please allow camera access in System Settings > Privacy & Security > Camera and reload.`;
-        console.error('Camera access failed:', err);
+      // Start camera and initialize
+      async start() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          this.showError('Camera access not supported. Try Chrome, Safari, or Firefox.');
+          return;
+        }
+        try {
+          this.stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          this.video.srcObject = this.stream;
+          this.video.onloadedmetadata = () => {
+            this.updateCanvasSize();
+            this.processFrame();
+          };
+        } catch (err) {
+          this.showError(`Camera access failed: ${err.message}. Allow camera in System Settings > Privacy & Security > Camera and reload.`);
+        }
+      },
+
+      // Update canvas pixel dimensions to match display size
+      updateCanvasSize() {
+        const aspectRatio = this.video.videoWidth / this.video.videoHeight;
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        let canvasWidth, canvasHeight;
+
+        if (vw / vh > aspectRatio) {
+          canvasHeight = vh;
+          canvasWidth = vh * aspectRatio;
+        } else {
+          canvasWidth = vw;
+          canvasHeight = vw / aspectRatio;
+        }
+
+        this.canvas.width = Math.round(canvasWidth);
+        this.canvas.height = Math.round(canvasHeight);
+      },
+
+      // Render video frame to canvas (CSS handles grayscale)
+      processFrame() {
+        const ctx = this.canvas.getContext('2d');
+        ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
+        this.rafId = requestAnimationFrame(() => this.processFrame());
+      },
+
+      // Display error message
+      showError(message) {
+        this.errorDiv.textContent = message;
+        console.error(message);
+      },
+
+      // Clean up resources
+      cleanup() {
+        if (this.rafId) cancelAnimationFrame(this.rafId);
+        if (this.stream) {
+          this.stream.getTracks().forEach(track => track.stop());
+        }
       }
-    }
+    };
 
-    // Update canvas pixel dimensions to match display size
-    function updateCanvasSize() {
-      const aspectRatio = video.videoWidth / video.videoHeight;
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-      let canvasWidth, canvasHeight;
+    // Debounce resize events
+    let resizeTimeout;
+    const debounceResize = () => {
+      clearTimeout(resizeTimeout);
+      resizeTimeout = setTimeout(() => simulator.updateCanvasSize(), 100);
+    };
 
-      if (vw / vh > aspectRatio) {
-        // Viewport is wider than video; fit to height
-        canvasHeight = vh;
-        canvasWidth = vh * aspectRatio;
-      } else {
-        // Viewport is taller than video; fit to width
-        canvasWidth = vw;
-        canvasHeight = vw / aspectRatio;
-      }
-
-      canvas.width = Math.round(canvasWidth);
-      canvas.height = Math.round(canvasHeight);
-    }
-
-    // Process video frame (grayscale only)
-    function processFrame() {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      let imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      let data = imgData.data;
-      for (let i = 0; i < data.length; i += 4) {
-        const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-        data[i] = data[i + 1] = data[i + 2] = avg;
-      }
-      ctx.putImageData(imgData, 0, 0);
-      requestAnimationFrame(processFrame);
-    }
-
-    // Handle window resize
-    window.addEventListener('resize', updateCanvasSize);
-
-    // Check if getUserMedia is supported
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      errorDiv.textContent = 'Error: This browser does not support camera access. Try Chrome, Safari, or Firefox.';
-    } else {
-      startCamera();
-    }
+    // Initialize and set up event listeners
+    window.addEventListener('resize', debounceResize);
+    window.addEventListener('unload', () => simulator.cleanup());
+    simulator.start();
   </script>
 </body>
 </html>
