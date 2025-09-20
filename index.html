@@ -49,9 +49,9 @@
     #canvas {
       width: 100%;
       height: 100%;
-      object-fit: contain;
+      object-fit: cover; /* Fill screen, crop as needed */
       display: block;
-      filter: grayscale(100%); /* Apply grayscale via CSS for efficiency */
+      filter: grayscale(100%); /* Apply grayscale via CSS */
     }
     #error {
       position: absolute;
@@ -105,11 +105,13 @@
         let canvasWidth, canvasHeight;
 
         if (vw / vh > aspectRatio) {
-          canvasHeight = vh;
-          canvasWidth = vh * aspectRatio;
-        } else {
+          // Viewport is wider than video; fit to width, crop height
           canvasWidth = vw;
           canvasHeight = vw / aspectRatio;
+        } else {
+          // Viewport is taller than video; fit to height, crop width
+          canvasHeight = vh;
+          canvasWidth = vh * aspectRatio;
         }
 
         this.canvas.width = Math.round(canvasWidth);
