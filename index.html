@@ -114,16 +114,19 @@
               this.luxDiv.textContent = `Lux: ${Math.round(this.sensor.illuminance)}`;
               this.luxDiv.style.display = 'block';
             });
-            this.sensor.addEventListener('error', () => {
-              this.luxDiv.style.display = 'none';
+            this.sensor.addEventListener('error', (err) => {
+              this.luxDiv.textContent = `Sensor error: ${err.message}. Using pixel estimate.`;
+              this.luxDiv.style.display = 'block';
             });
             this.sensor.start();
           } catch (err) {
-            console.warn('Light sensor not available:', err);
-            this.luxDiv.style.display = 'none';
+            this.luxDiv.textContent = `Sensor unavailable: ${err.message}. Using pixel estimate.`;
+            this.luxDiv.style.display = 'block';
+            console.warn('Light sensor failed:', err);
           }
         } else {
-          this.luxDiv.style.display = 'none';
+          this.luxDiv.textContent = 'Ambient light sensor not supported. Using pixel estimate.';
+          this.luxDiv.style.display = 'block';
         }
       },
 
@@ -169,7 +172,7 @@
         // Estimate light intensity
         const avgLum = this.getAverageLuminance(data, data.length);
         const lux = this.sensor && this.sensor.illuminance ? this.sensor.illuminance : avgLum * 10;
-        if (!this.sensor) {
+        if (!this.sensor || !this.sensor.illuminance) {
           this.luxDiv.textContent = `Lux (est.): ${Math.round(lux)}`;
           this.luxDiv.style.display = 'block';
         }
