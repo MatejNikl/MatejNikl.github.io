@@ -54,6 +54,7 @@
       filter: grayscale(100%); /* Apply grayscale via CSS */
     }
     #error {
+      display: none; /* Hidden by default */
       position: absolute;
       top: 10px;
       left: 10px;
@@ -130,6 +131,7 @@
       // Display error message
       showError(message) {
         this.errorDiv.textContent = message;
+        this.errorDiv.style.display = 'block'; // Show when error occurs
         console.error(message);
       },
 
