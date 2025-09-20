@@ -86,7 +86,9 @@
           return;
         }
         try {
-          this.stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          this.stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment' } // Prefer rear camera
+          });
           this.video.srcObject = this.stream;
           this.video.onloadedmetadata = () => {
             this.updateCanvasSize();
