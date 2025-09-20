@@ -51,34 +51,38 @@
       height: 100%;
       object-fit: cover; /* Fill screen, crop as needed */
       display: block;
-      filter: grayscale(100%); /* Apply grayscale via CSS */
     }
-    #error {
+    #error, #lux {
       display: none; /* Hidden by default */
       position: absolute;
       top: 10px;
       left: 10px;
-      color: red;
-      background: white;
+      color: white;
+      background: rgba(0, 0, 0, 0.5);
       padding: 5px;
       font-size: 14px;
       max-width: 90%;
-      aria-live: "assertive";
     }
+    #error { color: red; aria-live: "assertive"; }
   </style>
 </head>
 <body>
   <video id="video" autoplay playsinline></video>
   <canvas id="canvas"></canvas>
   <div id="error" role="alert"></div>
+  <div id="lux"></div>
   <script>
     // Core simulator logic
     const simulator = {
       video: document.getElementById('video'),
       canvas: document.getElementById('canvas'),
       errorDiv: document.getElementById('error'),
+      luxDiv: document.getElementById('lux'),
       stream: null,
       rafId: null,
+      sensor: null,
+      THRESHOLD_LUX: 200, // Blinding effect threshold
+      MAX_LUX: 10000, // Max lux for effect normalization
 
       // Start camera and initialize
       async start() {
@@ -93,10 +97,33 @@
           this.video.srcObject = this.stream;
           this.video.onloadedmetadata = () => {
             this.updateCanvasSize();
+            this.initLightSensor();
             this.processFrame();
           };
         } catch (err) {
           this.showError(`Camera access failed: ${err.message}. Allow camera in System Settings > Privacy & Security > Camera and reload.`);
+        }
+      },
+
+      // Initialize ambient light sensor
+      initLightSensor() {
+        if ('AmbientLightSensor' in window) {
+          try {
+            this.sensor = new AmbientLightSensor();
+            this.sensor.addEventListener('reading', () => {
+              this.luxDiv.textContent = `Lux: ${Math.round(this.sensor.illuminance)}`;
+              this.luxDiv.style.display = 'block';
+            });
+            this.sensor.addEventListener('error', () => {
+              this.luxDiv.style.display = 'none';
+            });
+            this.sensor.start();
+          } catch (err) {
+            console.warn('Light sensor not available:', err);
+            this.luxDiv.style.display = 'none';
+          }
+        } else {
+          this.luxDiv.style.display = 'none';
         }
       },
 
@@ -108,11 +135,9 @@
         let canvasWidth, canvasHeight;
 
         if (vw / vh > aspectRatio) {
-          // Viewport is wider than video; fit to width, crop height
           canvasWidth = vw;
           canvasHeight = vw / aspectRatio;
         } else {
-          // Viewport is taller than video; fit to height, crop width
           canvasHeight = vh;
           canvasWidth = vh * aspectRatio;
         }
@@ -121,17 +146,55 @@
         this.canvas.height = Math.round(canvasHeight);
       },
 
-      // Render video frame to canvas (CSS handles grayscale)
+      // Calculate average luminance for fallback lux estimation
+      getAverageLuminance(data, length) {
+        let sum = 0;
+        for (let i = 0; i < length; i += 4) sum += data[i];
+        return sum / (length / 4);
+      },
+
+      // Render video frame with grayscale and blinding effect
       processFrame() {
         const ctx = this.canvas.getContext('2d');
         ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
+        let imgData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+        let data = imgData.data;
+
+        // Grayscale
+        for (let i = 0; i < data.length; i += 4) {
+          const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+          data[i] = data[i + 1] = data[i + 2] = avg;
+        }
+
+        // Estimate light intensity
+        const avgLum = this.getAverageLuminance(data, data.length);
+        const lux = this.sensor && this.sensor.illuminance ? this.sensor.illuminance : avgLum * 10;
+        if (!this.sensor) {
+          this.luxDiv.textContent = `Lux (est.): ${Math.round(lux)}`;
+          this.luxDiv.style.display = 'block';
+        }
+
+        // Apply blinding effect
+        const excess = Math.max(0, lux - this.THRESHOLD_LUX);
+        const factor = Math.min(1, excess / this.MAX_LUX);
+        if (factor > 0) {
+          for (let i = 0; i < data.length; i += 4) {
+            let val = data[i];
+            val = val + factor * 255; // Increase brightness
+            val = Math.min(255, Math.max(0, val));
+            val = 255 * factor + val * (1 - factor); // Reduce contrast
+            data[i] = data[i + 1] = data[i + 2] = val;
+          }
+        }
+
+        ctx.putImageData(imgData, 0, 0);
         this.rafId = requestAnimationFrame(() => this.processFrame());
       },
 
       // Display error message
       showError(message) {
         this.errorDiv.textContent = message;
-        this.errorDiv.style.display = 'block'; // Show when error occurs
+        this.errorDiv.style.display = 'block';
         console.error(message);
       },
 
@@ -140,6 +203,9 @@
         if (this.rafId) cancelAnimationFrame(this.rafId);
         if (this.stream) {
           this.stream.getTracks().forEach(track => track.stop());
+        }
+        if (this.sensor) {
+          this.sensor.stop();
         }
       }
     };
