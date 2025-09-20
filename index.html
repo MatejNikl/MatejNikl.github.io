@@ -81,6 +81,7 @@
       stream: null,
       rafId: null,
       sensor: null,
+      sensorFailed: false,
       THRESHOLD_LUX: 200, // Blinding effect threshold
       MAX_LUX: 10000, // Max lux for effect normalization
 
@@ -113,21 +114,28 @@
             this.sensor.addEventListener('reading', () => {
               this.luxDiv.textContent = `Lux: ${Math.round(this.sensor.illuminance)}`;
               this.luxDiv.style.display = 'block';
+              this.sensorFailed = false;
             });
             this.sensor.addEventListener('error', (err) => {
-              this.luxDiv.textContent = `Sensor error: ${err.message}. Using pixel estimate.`;
-              this.luxDiv.style.display = 'block';
+              this.setLuxMessage(`Sensor error: ${err.message}. Using pixel estimate.`);
+              this.sensorFailed = true;
             });
             this.sensor.start();
           } catch (err) {
-            this.luxDiv.textContent = `Sensor unavailable: ${err.message}. Using pixel estimate.`;
-            this.luxDiv.style.display = 'block';
-            console.warn('Light sensor failed:', err);
+            this.setLuxMessage(`Sensor unavailable: ${err.message}. Using pixel estimate.`);
+            this.sensorFailed = true;
           }
         } else {
-          this.luxDiv.textContent = 'Ambient light sensor not supported. Using pixel estimate.';
-          this.luxDiv.style.display = 'block';
+          this.setLuxMessage('Ambient light sensor not supported. Using pixel estimate.');
+          this.sensorFailed = true;
         }
+      },
+
+      // Set lux message without overwrite
+      setLuxMessage(message) {
+        this.luxDiv.textContent = message;
+        this.luxDiv.style.display = 'block';
+        console.warn(message);
       },
 
       // Update canvas pixel dimensions to match display size
@@ -172,9 +180,10 @@
         // Estimate light intensity
         const avgLum = this.getAverageLuminance(data, data.length);
         const lux = this.sensor && this.sensor.illuminance ? this.sensor.illuminance : avgLum * 10;
-        if (!this.sensor || !this.sensor.illuminance) {
-          this.luxDiv.textContent = `Lux (est.): ${Math.round(lux)}`;
-          this.luxDiv.style.display = 'block';
+
+        // Update lux div only for estimate if sensor failed
+        if (this.sensorFailed) {
+          this.luxDiv.textContent = `${this.luxDiv.textContent.split('.')[0]}. Lux (est.): ${Math.round(lux)}`;
         }
 
         // Apply blinding effect
