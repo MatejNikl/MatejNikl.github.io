@@ -84,8 +84,9 @@
   <div id="info"></div>
   <div id="toggle" title="Toggle simulation">&#9681;</div>
   <div id="slider-wrap">
-    <label for="severity">Sensitivity</label>
+    <label id="sev-label-lo" for="severity">mild</label>
     <input type="range" id="severity" min="0" max="100" value="50">
+    <label id="sev-label-hi" for="severity">severe</label>
   </div>
   <script>
     const simulator = {
@@ -105,6 +106,7 @@
       exposureControlMode: 'none',
       isClamped: false,
       caps: null,
+      hasET: false,
       severity: 0.5,
       MAX_PROCESS_WIDTH: 640,
       POLL_MS: 500,
@@ -130,34 +132,19 @@
         }
       },
 
-      getCeilings() {
-        if (!this.caps) return null;
-        // severity 0 = mild (ceiling near device max, almost no restriction)
-        // severity 1 = severe (ceiling near device min, heavy restriction)
-        const s = this.severity;
-        const ceilings = {};
-
-        if (this.caps.exposureTime) {
-          const { min, max } = this.caps.exposureTime;
-          // Ceiling on ET: at severity=1, only allow short ET (near min),
-          // meaning camera can't use long exposures to gather more light
-          // in moderate conditions. At severity=0, allow up to max.
-          // We use a log scale since ET ranges are often huge.
-          const logMin = Math.log(min);
-          const logMax = Math.log(max);
-          ceilings.exposureTime = Math.exp(logMax - s * (logMax - logMin) * 0.7);
-        }
-
-        if (this.caps.iso) {
-          const { min, max } = this.caps.iso;
-          // Ceiling on ISO: at severity=1, restrict to low ISO (near min),
-          // preventing the camera from boosting gain. At severity=0, allow max.
-          const logMin = Math.log(min);
-          const logMax = Math.log(max);
-          ceilings.iso = Math.exp(logMax - s * (logMax - logMin) * 0.7);
-        }
-
-        return ceilings;
+      // Compute the ET floor: the minimum exposure time we allow the
+      // camera to use. In bright light the camera wants a very short ET;
+      // we prevent it from going below this floor, forcing over-exposure
+      // that simulates rod saturation.
+      //
+      // severity 0 (mild)   = floor near device min ET (almost no restriction)
+      // severity 1 (severe) = floor near device max ET (heavy restriction)
+      getETFloor() {
+        if (!this.caps?.exposureTime) return null;
+        const { min, max } = this.caps.exposureTime;
+        const logMin = Math.log(min);
+        const logMax = Math.log(max);
+        return Math.exp(logMin + this.severity * (logMax - logMin));
       },
 
       async applySimulation() {
@@ -186,10 +173,9 @@
 
         const hasManual = this.caps.exposureMode?.includes('manual');
         const hasContinuous = this.caps.exposureMode?.includes('continuous');
-        const hasET = !!this.caps.exposureTime;
-        const hasISO = !!this.caps.iso;
+        this.hasET = !!this.caps.exposureTime;
 
-        if (!hasManual || (!hasET && !hasISO)) {
+        if (!hasManual || !this.hasET) {
           this.exposureControlMode = 'none';
           this.sliderWrap.style.display = 'none';
           this.showInfo('Achromatopsia sim (pixel fallback)');
@@ -211,22 +197,16 @@
       },
 
       async tryRangeConstrained() {
-        const ceilings = this.getCeilings();
-        if (!ceilings) return false;
+        const floor = this.getETFloor();
+        if (floor == null) return false;
 
-        const constraint = { exposureMode: 'continuous' };
-        if (ceilings.exposureTime) {
-          constraint.exposureTime = {
-            min: this.caps.exposureTime.min,
-            max: Math.round(ceilings.exposureTime)
-          };
-        }
-        if (ceilings.iso) {
-          constraint.iso = {
-            min: this.caps.iso.min,
-            max: Math.round(ceilings.iso)
-          };
-        }
+        const constraint = {
+          exposureMode: 'continuous',
+          exposureTime: {
+            min: Math.round(floor),
+            max: this.caps.exposureTime.max
+          }
+        };
 
         try {
           await this.track.applyConstraints({ advanced: [constraint] });
@@ -235,23 +215,18 @@
           return false;
         }
 
-        // Verify it actually works: wait a moment, then check if values
-        // are being clamped within our range.
+        // Verify: wait, then check the actual ET is above our floor.
         await new Promise(r => setTimeout(r, 600));
         const settings = this.track.getSettings();
-        const etOk = !ceilings.exposureTime ||
-          (settings.exposureTime != null && settings.exposureTime <= ceilings.exposureTime * 1.1);
-        const isoOk = !ceilings.iso ||
-          (settings.iso != null && settings.iso <= ceilings.iso * 1.1);
-
-        if (etOk && isoOk) {
+        const et = settings.exposureTime;
+        if (et != null && et >= floor * 0.9) {
           this.isClamped = false;
           this.updateInfoDisplay(settings);
-          console.log('Strategy A (range-constrained) working');
+          console.log('Strategy A working, ET floor', Math.round(floor));
           return true;
         }
 
-        console.warn('Strategy A values outside range, falling back to B');
+        console.warn('Strategy A: ET', et, 'below floor', floor, '-- falling back to B');
         return false;
       },
 
@@ -272,42 +247,50 @@
         if (!this.simulationActive || this.exposureControlMode !== 'clamp') return;
 
         const settings = this.track.getSettings();
-        const ceilings = this.getCeilings();
-        if (!ceilings) return;
+        const floor = this.getETFloor();
+        if (floor == null) return;
 
         const currentET = settings.exposureTime;
-        const currentISO = settings.iso;
-        const ceilET = ceilings.exposureTime ? Math.round(ceilings.exposureTime) : null;
-        const ceilISO = ceilings.iso ? Math.round(ceilings.iso) : null;
+        if (currentET == null) return;
 
-        const etExceeds = ceilET != null && currentET != null && currentET > ceilET;
-        const isoExceeds = ceilISO != null && currentISO != null && currentISO > ceilISO;
-        const needsClamp = etExceeds || isoExceeds;
+        const floorET = Math.round(floor);
+        const belowFloor = currentET < floorET;
 
-        if (needsClamp && !this.isClamped) {
-          const constraint = { exposureMode: 'manual' };
-          if (ceilET != null) constraint.exposureTime = etExceeds ? ceilET : currentET;
-          if (ceilISO != null) constraint.iso = isoExceeds ? ceilISO : currentISO;
+        if (belowFloor && !this.isClamped) {
+          // Camera chose an ET below our floor -- switch to manual and
+          // force the floor value, preventing the short shutter speed.
           try {
-            await this.track.applyConstraints({ advanced: [constraint] });
+            await this.track.applyConstraints({
+              advanced: [{ exposureMode: 'manual', exposureTime: floorET }]
+            });
             this.isClamped = true;
           } catch (e) { console.warn('Clamp failed:', e); }
-        } else if (needsClamp && this.isClamped) {
-          // Already clamped; update the forced values if ceilings changed
-          const constraint = { exposureMode: 'manual' };
-          if (ceilET != null) constraint.exposureTime = ceilET;
-          if (ceilISO != null) constraint.iso = ceilISO;
-          try {
-            await this.track.applyConstraints({ advanced: [constraint] });
-          } catch (e) { /* best effort */ }
-        } else if (!needsClamp && this.isClamped) {
-          // Light dropped, release back to auto
+        } else if (this.isClamped) {
+          // We're currently clamped. Briefly switch to auto to sample
+          // what the camera would choose, then decide if we still need
+          // to clamp.
           try {
             await this.track.applyConstraints({
               advanced: [{ exposureMode: 'continuous' }]
             });
-            this.isClamped = false;
           } catch (e) { /* best effort */ }
+
+          // Give auto-exposure a moment to settle
+          await new Promise(r => setTimeout(r, 200));
+          const autoSettings = this.track.getSettings();
+          const autoET = autoSettings.exposureTime;
+
+          if (autoET != null && autoET < floorET) {
+            // Still too bright -- re-clamp
+            try {
+              await this.track.applyConstraints({
+                advanced: [{ exposureMode: 'manual', exposureTime: floorET }]
+              });
+            } catch (e) { /* best effort */ }
+          } else {
+            // Light is dim enough, stay in auto
+            this.isClamped = false;
+          }
         }
 
         this.updateInfoDisplay(this.track.getSettings());
@@ -315,8 +298,7 @@
 
       updateInfoDisplay(settings) {
         const et = settings?.exposureTime;
-        const iso = settings?.iso;
-        const ceilings = this.getCeilings();
+        const floor = this.getETFloor();
 
         let mode;
         if (this.exposureControlMode === 'range') mode = 'HW range';
@@ -324,13 +306,8 @@
         else mode = 'auto';
 
         let parts = [mode];
-        if (et != null) {
-          const ceilET = ceilings?.exposureTime ? Math.round(ceilings.exposureTime) : '?';
-          parts.push(`ET ${Math.round(et)}/${ceilET}µs`);
-        }
-        if (iso != null) {
-          const ceilISO = ceilings?.iso ? Math.round(ceilings.iso) : '?';
-          parts.push(`ISO ${Math.round(iso)}/${ceilISO}`);
+        if (et != null && floor != null) {
+          parts.push(`ET ${Math.round(et)} \u2265 ${Math.round(floor)}\xB5s`);
         }
         this.showInfo('Achromatopsia sim (' + parts.join(' | ') + ')');
       },
@@ -359,7 +336,18 @@
         if (this.exposureControlMode === 'range') {
           await this.tryRangeConstrained();
         }
-        // For 'clamp' mode, the next pollTick picks up the new ceilings.
+        if (this.exposureControlMode === 'clamp' && this.isClamped) {
+          // Immediately re-clamp to new floor
+          const floor = this.getETFloor();
+          if (floor != null) {
+            try {
+              await this.track.applyConstraints({
+                advanced: [{ exposureMode: 'manual', exposureTime: Math.round(floor) }]
+              });
+            } catch (e) { /* best effort */ }
+            this.updateInfoDisplay(this.track.getSettings());
+          }
+        }
       },
 
       updateCanvasSize() {
