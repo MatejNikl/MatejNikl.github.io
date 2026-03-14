@@ -33,164 +33,132 @@
   <div id="error" role="alert"></div>
   <div id="lux"></div>
   <script>
-    // Core simulator logic
     const simulator = {
       video: document.getElementById('video'),
       canvas: document.getElementById('canvas'),
       errorDiv: document.getElementById('error'),
-      luxDiv: document.getElementById('lux'),
+      infoDiv: document.getElementById('lux'),
       stream: null,
+      track: null,
       rafId: null,
-      sensor: null,
-      sensorFailed: false,
-      THRESHOLD_LUX: 200, // Blinding effect threshold
-      MAX_LUX: 10000, // Max lux for effect normalization
+      hasManualExposure: false,
 
-      // Start camera and initialize
       async start() {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          this.showError('Camera access not supported. Try Chrome, Safari, or Firefox.');
+        if (!navigator.mediaDevices?.getUserMedia) {
+          this.showError('Camera access not supported. Try Chrome or Safari.');
           return;
         }
         try {
           this.stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment' } // Prefer rear camera
+            video: { facingMode: 'environment' }
           });
+          this.track = this.stream.getVideoTracks()[0];
           this.video.srcObject = this.stream;
           this.video.onloadedmetadata = () => {
             this.updateCanvasSize();
-            this.initLightSensor();
+            this.tryManualExposure();
             this.processFrame();
           };
         } catch (err) {
-          this.showError(`Camera access failed: ${err.message}. Allow camera in System Settings > Privacy & Security > Camera and reload.`);
+          this.showError(`Camera failed: ${err.message}`);
         }
       },
 
-      // Initialize ambient light sensor
-      initLightSensor() {
-        if ('AmbientLightSensor' in window) {
-          try {
-            this.sensor = new AmbientLightSensor();
-            this.sensor.addEventListener('reading', () => {
-              this.luxDiv.textContent = `Lux: ${Math.round(this.sensor.illuminance)}`;
-              this.luxDiv.style.display = 'block';
-              this.sensorFailed = false;
-            });
-            this.sensor.addEventListener('error', (err) => {
-              this.setLuxMessage(`Sensor error: ${err.message}. Using pixel estimate.`);
-              this.sensorFailed = true;
-            });
-            this.sensor.start();
-          } catch (err) {
-            this.setLuxMessage(`Sensor unavailable: ${err.message}. Using pixel estimate.`);
-            this.sensorFailed = true;
-          }
-        } else {
-          this.setLuxMessage('Ambient light sensor not supported. Using pixel estimate.');
-          this.sensorFailed = true;
+      async tryManualExposure() {
+        if (!this.track.getCapabilities) {
+          this.showInfo('No exposure control API. Using pixel fallback.');
+          return;
+        }
+        const caps = this.track.getCapabilities();
+        console.log('Camera capabilities:', caps);
+
+        if (!caps.exposureMode?.includes('manual')) {
+          this.showInfo('Camera does not support manual exposure. Using pixel fallback.');
+          return;
+        }
+
+        const constraints = { advanced: [{ exposureMode: 'manual' }] };
+        const applied = ['manual exposure'];
+
+        // Fix exposure time to a high value to prevent the camera from
+        // compensating for bright light -- simulates rods that cannot
+        // shorten their integration time.
+        if (caps.exposureTime) {
+          const maxET = caps.exposureTime.max;
+          const targetET = Math.min(maxET, 33333);
+          constraints.advanced[0].exposureTime = targetET;
+          applied.push(`exposureTime=${targetET}µs`);
+        }
+
+        // Fix ISO to a high value to simulate rod gain that cannot decrease.
+        if (caps.iso) {
+          constraints.advanced[0].iso = caps.iso.max;
+          applied.push(`iso=${caps.iso.max}`);
+        }
+
+        try {
+          await this.track.applyConstraints(constraints);
+          this.hasManualExposure = true;
+          this.showInfo('HW exposure lock: ' + applied.join(', '));
+        } catch (err) {
+          console.warn('applyConstraints failed:', err);
+          this.showInfo('Exposure lock failed. Using pixel fallback.');
         }
       },
 
-      // Set lux message without overwrite
-      setLuxMessage(message) {
-        this.luxDiv.textContent = message;
-        this.luxDiv.style.display = 'block';
-        console.warn(message);
-      },
-
-      // Update canvas pixel dimensions to match display size
       updateCanvasSize() {
         const aspectRatio = this.video.videoWidth / this.video.videoHeight;
         const vw = window.innerWidth;
         const vh = window.innerHeight;
-        let canvasWidth, canvasHeight;
-
-        if (vw / vh > aspectRatio) {
-          canvasWidth = vw;
-          canvasHeight = vw / aspectRatio;
-        } else {
-          canvasHeight = vh;
-          canvasWidth = vh * aspectRatio;
-        }
-
-        this.canvas.width = Math.round(canvasWidth);
-        this.canvas.height = Math.round(canvasHeight);
+        let cw, ch;
+        if (vw / vh > aspectRatio) { cw = vw; ch = vw / aspectRatio; }
+        else { ch = vh; cw = vh * aspectRatio; }
+        this.canvas.width = Math.round(cw);
+        this.canvas.height = Math.round(ch);
       },
 
-      // Calculate average luminance for fallback lux estimation
-      getAverageLuminance(data, length) {
-        let sum = 0;
-        for (let i = 0; i < length; i += 4) sum += data[i];
-        return sum / (length / 4);
-      },
-
-      // Render video frame with grayscale and blinding effect
       processFrame() {
         const ctx = this.canvas.getContext('2d');
         ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
-        let imgData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
-        let data = imgData.data;
+        const imgData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+        const data = imgData.data;
 
         for (let i = 0; i < data.length; i += 4) {
           const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
           data[i] = data[i + 1] = data[i + 2] = lum;
         }
 
-        // Estimate light intensity
-        const avgLum = this.getAverageLuminance(data, data.length);
-        const lux = this.sensor && this.sensor.illuminance ? this.sensor.illuminance : avgLum * 10;
-
-        // Update lux div only for estimate if sensor failed
-        if (this.sensorFailed) {
-          this.luxDiv.textContent = `${this.luxDiv.textContent.split('.')[0]}. Lux (est.): ${Math.round(lux)}`;
-        }
-
-        // Apply blinding effect
-        const excess = Math.max(0, lux - this.THRESHOLD_LUX);
-        const factor = Math.min(1, excess / this.MAX_LUX);
-        if (factor > 0) {
-          for (let i = 0; i < data.length; i += 4) {
-            let val = data[i];
-            val = val + factor * 255; // Increase brightness
-            val = Math.min(255, Math.max(0, val));
-            val = 255 * factor + val * (1 - factor); // Reduce contrast
-            data[i] = data[i + 1] = data[i + 2] = val;
-          }
-        }
+        // When hardware exposure lock is active, bright scenes blow out
+        // naturally through the sensor. No pixel post-processing needed.
+        // When not available, the fallback will be added in a later commit.
 
         ctx.putImageData(imgData, 0, 0);
         this.rafId = requestAnimationFrame(() => this.processFrame());
       },
 
-      // Display error message
       showError(message) {
         this.errorDiv.textContent = message;
         this.errorDiv.style.display = 'block';
         console.error(message);
       },
 
-      // Clean up resources
+      showInfo(message) {
+        this.infoDiv.textContent = message;
+        this.infoDiv.style.display = 'block';
+        console.log(message);
+      },
+
       cleanup() {
         if (this.rafId) cancelAnimationFrame(this.rafId);
-        if (this.stream) {
-          this.stream.getTracks().forEach(track => track.stop());
-        }
-        if (this.sensor) {
-          this.sensor.stop();
-        }
+        if (this.stream) this.stream.getTracks().forEach(t => t.stop());
       }
     };
 
-    // Debounce resize events
     let resizeTimeout;
-    const debounceResize = () => {
+    window.addEventListener('resize', () => {
       clearTimeout(resizeTimeout);
       resizeTimeout = setTimeout(() => simulator.updateCanvasSize(), 100);
-    };
-
-    // Initialize and set up event listeners
-    window.addEventListener('resize', debounceResize);
+    });
     window.addEventListener('unload', () => simulator.cleanup());
     simulator.start();
   </script>
