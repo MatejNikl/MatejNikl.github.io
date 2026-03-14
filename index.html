@@ -59,15 +59,19 @@
       user-select: none;
     }
     .tbtn:active { background: rgba(255,255,255,0.15); }
-    .tbtn.on {
-      border-color: rgba(255,255,255,0.7);
-      color: #fff;
-    }
-    #et-wrap {
+    .tbtn.on { border-color: rgba(255,255,255,0.7); color: #fff; }
+    .tbtn.hidden { display: none; }
+    #sliders {
       position: absolute;
       bottom: 20px;
       left: 16px;
       right: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      z-index: 10;
+    }
+    .slider-row {
       display: none;
       align-items: center;
       gap: 8px;
@@ -75,12 +79,17 @@
       padding: 8px 12px;
       border-radius: 8px;
     }
-    #et-wrap label {
+    .slider-row label {
       color: #ccc;
       font-size: 12px;
       white-space: nowrap;
+      min-width: 28px;
     }
-    #et-slider {
+    .slider-row .val {
+      min-width: 48px;
+      text-align: right;
+    }
+    .slider-row input[type=range] {
       flex: 1;
       accent-color: #aaa;
     }
@@ -93,12 +102,20 @@
   <div id="info"></div>
   <div class="controls">
     <div id="btn-gray" class="tbtn on" title="Grayscale">G</div>
+    <div id="btn-et" class="tbtn hidden" title="Exposure">E</div>
     <div id="btn-sig" class="tbtn" title="Sigmoid wash-out">S</div>
   </div>
-  <div id="et-wrap">
-    <label>auto</label>
-    <input type="range" id="et-slider" min="0" max="100" value="0">
-    <label id="et-value">auto</label>
+  <div id="sliders">
+    <div id="et-row" class="slider-row">
+      <label>ET</label>
+      <input type="range" id="et-slider" min="1" max="100" value="50">
+      <label id="et-val" class="val">--</label>
+    </div>
+    <div id="sig-row" class="slider-row">
+      <label>thr</label>
+      <input type="range" id="sig-slider" min="30" max="80" value="60">
+      <label id="sig-val" class="val">0.60</label>
+    </div>
   </div>
   <script>
     const sim = {
@@ -107,10 +124,14 @@
       errorDiv: document.getElementById('error'),
       infoDiv: document.getElementById('info'),
       btnGray: document.getElementById('btn-gray'),
+      btnET: document.getElementById('btn-et'),
       btnSig: document.getElementById('btn-sig'),
-      etWrap: document.getElementById('et-wrap'),
+      etRow: document.getElementById('et-row'),
       etSlider: document.getElementById('et-slider'),
-      etValueLabel: document.getElementById('et-value'),
+      etVal: document.getElementById('et-val'),
+      sigRow: document.getElementById('sig-row'),
+      sigSlider: document.getElementById('sig-slider'),
+      sigVal: document.getElementById('sig-val'),
       stream: null,
       track: null,
       rafId: null,
@@ -118,8 +139,10 @@
       caps: null,
       supportsET: false,
       grayscaleOn: true,
+      etOn: false,
       sigmoidOn: false,
       manualET: null,
+      sigmoidMidpoint: 0.6,
       MAX_PROCESS_WIDTH: 640,
 
       async start() {
@@ -155,41 +178,35 @@
         );
 
         if (this.supportsET) {
-          this.etWrap.style.display = 'flex';
+          this.btnET.classList.remove('hidden');
         }
       },
 
       getETFromSlider() {
         const val = parseInt(this.etSlider.value);
-        if (val === 0) return null;
         const { min, max } = this.caps.exposureTime;
         const logMin = Math.log(min);
         const logMax = Math.log(max);
-        const t = val / 100;
+        const t = (val - 1) / 99;
         return Math.round(Math.exp(logMin + t * (logMax - logMin)));
       },
 
-      async onETChange() {
+      async applyET() {
         const et = this.getETFromSlider();
-        if (et === null) {
-          this.manualET = null;
-          this.etValueLabel.textContent = 'auto';
-          await this.resetExposure();
-        } else {
-          this.manualET = et;
-          this.etValueLabel.textContent = et + '\xB5s';
-          try {
-            await this.track.applyConstraints({
-              advanced: [{ exposureMode: 'manual', exposureTime: et }]
-            });
-          } catch (e) {
-            console.warn('Manual ET failed:', e);
-          }
+        this.manualET = et;
+        this.etVal.textContent = et + '\xB5s';
+        try {
+          await this.track.applyConstraints({
+            advanced: [{ exposureMode: 'manual', exposureTime: et }]
+          });
+        } catch (e) {
+          console.warn('Manual ET failed:', e);
         }
         this.updateInfo();
       },
 
       async resetExposure() {
+        this.manualET = null;
         if (!this.track?.getCapabilities) return;
         if (!this.caps) this.caps = this.track.getCapabilities();
         if (this.caps.exposureMode?.includes('continuous')) {
@@ -198,6 +215,19 @@
               advanced: [{ exposureMode: 'continuous' }]
             });
           } catch (e) { /* best effort */ }
+        }
+      },
+
+      async toggleET() {
+        this.etOn = !this.etOn;
+        this.btnET.classList.toggle('on', this.etOn);
+        if (this.etOn) {
+          this.etRow.style.display = 'flex';
+          await this.applyET();
+        } else {
+          this.etRow.style.display = 'none';
+          await this.resetExposure();
+          this.updateInfo();
         }
       },
 
@@ -210,15 +240,21 @@
       toggleSigmoid() {
         this.sigmoidOn = !this.sigmoidOn;
         this.btnSig.classList.toggle('on', this.sigmoidOn);
+        this.sigRow.style.display = this.sigmoidOn ? 'flex' : 'none';
+        this.updateInfo();
+      },
+
+      onSigmoidThresholdChange() {
+        this.sigmoidMidpoint = parseInt(this.sigSlider.value) / 100;
+        this.sigVal.textContent = this.sigmoidMidpoint.toFixed(2);
         this.updateInfo();
       },
 
       updateInfo() {
         const parts = [];
         if (this.grayscaleOn) parts.push('grayscale');
-        if (this.manualET != null) parts.push('ET ' + this.manualET + '\xB5s');
-        else if (this.supportsET) parts.push('ET auto');
-        if (this.sigmoidOn) parts.push('sigmoid');
+        if (this.etOn && this.manualET != null) parts.push('ET ' + this.manualET + '\xB5s');
+        if (this.sigmoidOn) parts.push('sigmoid (' + this.sigmoidMidpoint.toFixed(2) + ')');
         this.showInfo(parts.length ? parts.join(' | ') : 'no effects');
       },
 
@@ -240,13 +276,13 @@
 
         ctx.drawImage(this.video, 0, 0, w, h);
 
-        const needsPixelWork = this.grayscaleOn || this.sigmoidOn;
-        if (needsPixelWork) {
+        const doGray = this.grayscaleOn;
+        const doSigmoid = this.sigmoidOn;
+        if (doGray || doSigmoid) {
           const imgData = ctx.getImageData(0, 0, w, h);
           const data = imgData.data;
           const len = data.length;
-          const doGray = this.grayscaleOn;
-          const doSigmoid = this.sigmoidOn;
+          const mid = this.sigmoidMidpoint;
 
           for (let i = 0; i < len; i += 4) {
             let lum = doGray
@@ -255,17 +291,18 @@
 
             if (doSigmoid) {
               const t = lum / 255;
-              const blend = 1 / (1 + Math.exp(-12 * (t - 0.6)));
+              const blend = 1 / (1 + Math.exp(-12 * (t - mid)));
               lum = lum + blend * (255 - lum);
             }
 
             if (doGray) {
               data[i] = data[i + 1] = data[i + 2] = lum;
             } else if (doSigmoid) {
-              const scale = lum / ((data[i] + data[i + 1] + data[i + 2]) / 3 || 1);
-              data[i] = Math.min(255, data[i] * scale);
-              data[i + 1] = Math.min(255, data[i + 1] * scale);
-              data[i + 2] = Math.min(255, data[i + 2] * scale);
+              const avg = (data[i] + data[i + 1] + data[i + 2]) / 3 || 1;
+              const s = lum / avg;
+              data[i] = Math.min(255, data[i] * s);
+              data[i + 1] = Math.min(255, data[i + 1] * s);
+              data[i + 2] = Math.min(255, data[i + 2] * s);
             }
           }
 
@@ -293,8 +330,10 @@
     };
 
     document.getElementById('btn-gray').addEventListener('click', () => sim.toggleGrayscale());
+    document.getElementById('btn-et').addEventListener('click', () => sim.toggleET());
     document.getElementById('btn-sig').addEventListener('click', () => sim.toggleSigmoid());
-    document.getElementById('et-slider').addEventListener('input', () => sim.onETChange());
+    document.getElementById('et-slider').addEventListener('input', () => sim.applyET());
+    document.getElementById('sig-slider').addEventListener('input', () => sim.onSigmoidThresholdChange());
 
     let resizeTimeout;
     window.addEventListener('resize', () => {
