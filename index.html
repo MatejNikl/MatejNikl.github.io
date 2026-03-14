@@ -72,9 +72,11 @@
       stream: null,
       track: null,
       rafId: null,
+      ctx: null,
       hasManualExposure: false,
       simulationActive: true,
       caps: null,
+      MAX_PROCESS_WIDTH: 640,
 
       async start() {
         if (!navigator.mediaDevices?.getUserMedia) {
@@ -166,28 +168,34 @@
       },
 
       updateCanvasSize() {
-        const aspectRatio = this.video.videoWidth / this.video.videoHeight;
-        const vw = window.innerWidth;
-        const vh = window.innerHeight;
-        let cw, ch;
-        if (vw / vh > aspectRatio) { cw = vw; ch = vw / aspectRatio; }
-        else { ch = vh; cw = vh * aspectRatio; }
-        this.canvas.width = Math.round(cw);
-        this.canvas.height = Math.round(ch);
+        const vw = this.video.videoWidth;
+        const vh = this.video.videoHeight;
+        if (!vw || !vh) return;
+        // Cap internal resolution for performance; CSS scales to fill screen.
+        const scale = Math.min(1, this.MAX_PROCESS_WIDTH / vw);
+        this.canvas.width = Math.round(vw * scale);
+        this.canvas.height = Math.round(vh * scale);
+        this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
       },
 
       processFrame() {
-        const ctx = this.canvas.getContext('2d');
-        ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
+        const ctx = this.ctx;
+        if (!ctx) { this.rafId = requestAnimationFrame(() => this.processFrame()); return; }
+        const w = this.canvas.width;
+        const h = this.canvas.height;
+
+        ctx.drawImage(this.video, 0, 0, w, h);
 
         if (this.simulationActive) {
-          const imgData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+          const imgData = ctx.getImageData(0, 0, w, h);
           const data = imgData.data;
+          const len = data.length;
+          const needsFallback = !this.hasManualExposure;
 
-          for (let i = 0; i < data.length; i += 4) {
+          for (let i = 0; i < len; i += 4) {
             let lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
 
-            if (!this.hasManualExposure) {
+            if (needsFallback) {
               const t = lum / 255;
               const blend = 1 / (1 + Math.exp(-12 * (t - 0.6)));
               lum = lum + blend * (255 - lum);
