@@ -54,6 +54,27 @@
     }
     #toggle:active { background: rgba(255,255,255,0.2); }
     #toggle.normal { border-color: rgba(255,255,255,0.3); opacity: 0.6; }
+    #slider-wrap {
+      position: absolute;
+      bottom: 20px;
+      left: 16px;
+      right: 16px;
+      display: none;
+      align-items: center;
+      gap: 8px;
+      background: rgba(0,0,0,0.55);
+      padding: 8px 12px;
+      border-radius: 8px;
+    }
+    #slider-wrap label {
+      color: #ccc;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    #severity {
+      flex: 1;
+      accent-color: #aaa;
+    }
   </style>
 </head>
 <body>
@@ -62,6 +83,10 @@
   <div id="error" role="alert"></div>
   <div id="info"></div>
   <div id="toggle" title="Toggle simulation">&#9681;</div>
+  <div id="slider-wrap">
+    <label for="severity">Sensitivity</label>
+    <input type="range" id="severity" min="0" max="100" value="50">
+  </div>
   <script>
     const simulator = {
       video: document.getElementById('video'),
@@ -69,14 +94,20 @@
       errorDiv: document.getElementById('error'),
       infoDiv: document.getElementById('info'),
       toggleBtn: document.getElementById('toggle'),
+      sliderWrap: document.getElementById('slider-wrap'),
+      severityInput: document.getElementById('severity'),
       stream: null,
       track: null,
       rafId: null,
       ctx: null,
-      hasManualExposure: false,
+      pollInterval: null,
       simulationActive: true,
+      exposureControlMode: 'none',
+      isClamped: false,
       caps: null,
+      severity: 0.5,
       MAX_PROCESS_WIDTH: 640,
+      POLL_MS: 500,
 
       async start() {
         if (!navigator.mediaDevices?.getUserMedia) {
@@ -99,59 +130,214 @@
         }
       },
 
+      getCeilings() {
+        if (!this.caps) return null;
+        // severity 0 = mild (ceiling near device max, almost no restriction)
+        // severity 1 = severe (ceiling near device min, heavy restriction)
+        const s = this.severity;
+        const ceilings = {};
+
+        if (this.caps.exposureTime) {
+          const { min, max } = this.caps.exposureTime;
+          // Ceiling on ET: at severity=1, only allow short ET (near min),
+          // meaning camera can't use long exposures to gather more light
+          // in moderate conditions. At severity=0, allow up to max.
+          // We use a log scale since ET ranges are often huge.
+          const logMin = Math.log(min);
+          const logMax = Math.log(max);
+          ceilings.exposureTime = Math.exp(logMax - s * (logMax - logMin) * 0.7);
+        }
+
+        if (this.caps.iso) {
+          const { min, max } = this.caps.iso;
+          // Ceiling on ISO: at severity=1, restrict to low ISO (near min),
+          // preventing the camera from boosting gain. At severity=0, allow max.
+          const logMin = Math.log(min);
+          const logMax = Math.log(max);
+          ceilings.iso = Math.exp(logMax - s * (logMax - logMin) * 0.7);
+        }
+
+        return ceilings;
+      },
+
       async applySimulation() {
         if (!this.simulationActive) {
+          this.stopPolling();
           await this.resetExposure();
           this.showInfo('Normal view');
           this.toggleBtn.classList.add('normal');
+          this.sliderWrap.style.display = 'none';
           return;
         }
 
         this.toggleBtn.classList.remove('normal');
-        await this.tryManualExposure();
+        await this.initExposureControl();
       },
 
-      async tryManualExposure() {
-        if (!this.track.getCapabilities) {
+      async initExposureControl() {
+        if (!this.track.getCapabilities || !this.track.getSettings) {
+          this.exposureControlMode = 'none';
+          this.sliderWrap.style.display = 'none';
           this.showInfo('Achromatopsia sim (pixel fallback)');
           return;
         }
         if (!this.caps) this.caps = this.track.getCapabilities();
         console.log('Camera capabilities:', this.caps);
 
-        if (!this.caps.exposureMode?.includes('manual')) {
+        const hasManual = this.caps.exposureMode?.includes('manual');
+        const hasContinuous = this.caps.exposureMode?.includes('continuous');
+        const hasET = !!this.caps.exposureTime;
+        const hasISO = !!this.caps.iso;
+
+        if (!hasManual || (!hasET && !hasISO)) {
+          this.exposureControlMode = 'none';
+          this.sliderWrap.style.display = 'none';
           this.showInfo('Achromatopsia sim (pixel fallback)');
           return;
         }
 
-        const constraints = { advanced: [{ exposureMode: 'manual' }] };
-        const applied = [];
+        this.sliderWrap.style.display = 'flex';
 
-        if (this.caps.exposureTime) {
-          const targetET = Math.min(this.caps.exposureTime.max, 33333);
-          constraints.advanced[0].exposureTime = targetET;
-          applied.push(`ET ${targetET}µs`);
+        // Strategy A: try range-constrained continuous mode
+        if (hasContinuous && await this.tryRangeConstrained()) {
+          this.exposureControlMode = 'range';
+          return;
         }
 
-        if (this.caps.iso) {
-          constraints.advanced[0].iso = this.caps.iso.max;
-          applied.push(`ISO ${this.caps.iso.max}`);
+        // Strategy B: polling clamp loop
+        this.exposureControlMode = 'clamp';
+        await this.resetExposure();
+        this.startPolling();
+      },
+
+      async tryRangeConstrained() {
+        const ceilings = this.getCeilings();
+        if (!ceilings) return false;
+
+        const constraint = { exposureMode: 'continuous' };
+        if (ceilings.exposureTime) {
+          constraint.exposureTime = {
+            min: this.caps.exposureTime.min,
+            max: Math.round(ceilings.exposureTime)
+          };
+        }
+        if (ceilings.iso) {
+          constraint.iso = {
+            min: this.caps.iso.min,
+            max: Math.round(ceilings.iso)
+          };
         }
 
         try {
-          await this.track.applyConstraints(constraints);
-          this.hasManualExposure = true;
-          this.showInfo('Achromatopsia sim (HW: ' + applied.join(', ') + ')');
-        } catch (err) {
-          console.warn('applyConstraints failed:', err);
-          this.hasManualExposure = false;
-          this.showInfo('Achromatopsia sim (pixel fallback)');
+          await this.track.applyConstraints({ advanced: [constraint] });
+        } catch (e) {
+          console.warn('Strategy A (range-constrained) rejected:', e);
+          return false;
+        }
+
+        // Verify it actually works: wait a moment, then check if values
+        // are being clamped within our range.
+        await new Promise(r => setTimeout(r, 600));
+        const settings = this.track.getSettings();
+        const etOk = !ceilings.exposureTime ||
+          (settings.exposureTime != null && settings.exposureTime <= ceilings.exposureTime * 1.1);
+        const isoOk = !ceilings.iso ||
+          (settings.iso != null && settings.iso <= ceilings.iso * 1.1);
+
+        if (etOk && isoOk) {
+          this.isClamped = false;
+          this.updateInfoDisplay(settings);
+          console.log('Strategy A (range-constrained) working');
+          return true;
+        }
+
+        console.warn('Strategy A values outside range, falling back to B');
+        return false;
+      },
+
+      startPolling() {
+        this.stopPolling();
+        this.pollTick();
+        this.pollInterval = setInterval(() => this.pollTick(), this.POLL_MS);
+      },
+
+      stopPolling() {
+        if (this.pollInterval) {
+          clearInterval(this.pollInterval);
+          this.pollInterval = null;
         }
       },
 
+      async pollTick() {
+        if (!this.simulationActive || this.exposureControlMode !== 'clamp') return;
+
+        const settings = this.track.getSettings();
+        const ceilings = this.getCeilings();
+        if (!ceilings) return;
+
+        const currentET = settings.exposureTime;
+        const currentISO = settings.iso;
+        const ceilET = ceilings.exposureTime ? Math.round(ceilings.exposureTime) : null;
+        const ceilISO = ceilings.iso ? Math.round(ceilings.iso) : null;
+
+        const etExceeds = ceilET != null && currentET != null && currentET > ceilET;
+        const isoExceeds = ceilISO != null && currentISO != null && currentISO > ceilISO;
+        const needsClamp = etExceeds || isoExceeds;
+
+        if (needsClamp && !this.isClamped) {
+          const constraint = { exposureMode: 'manual' };
+          if (ceilET != null) constraint.exposureTime = etExceeds ? ceilET : currentET;
+          if (ceilISO != null) constraint.iso = isoExceeds ? ceilISO : currentISO;
+          try {
+            await this.track.applyConstraints({ advanced: [constraint] });
+            this.isClamped = true;
+          } catch (e) { console.warn('Clamp failed:', e); }
+        } else if (needsClamp && this.isClamped) {
+          // Already clamped; update the forced values if ceilings changed
+          const constraint = { exposureMode: 'manual' };
+          if (ceilET != null) constraint.exposureTime = ceilET;
+          if (ceilISO != null) constraint.iso = ceilISO;
+          try {
+            await this.track.applyConstraints({ advanced: [constraint] });
+          } catch (e) { /* best effort */ }
+        } else if (!needsClamp && this.isClamped) {
+          // Light dropped, release back to auto
+          try {
+            await this.track.applyConstraints({
+              advanced: [{ exposureMode: 'continuous' }]
+            });
+            this.isClamped = false;
+          } catch (e) { /* best effort */ }
+        }
+
+        this.updateInfoDisplay(this.track.getSettings());
+      },
+
+      updateInfoDisplay(settings) {
+        const et = settings?.exposureTime;
+        const iso = settings?.iso;
+        const ceilings = this.getCeilings();
+
+        let mode;
+        if (this.exposureControlMode === 'range') mode = 'HW range';
+        else if (this.isClamped) mode = 'clamped';
+        else mode = 'auto';
+
+        let parts = [mode];
+        if (et != null) {
+          const ceilET = ceilings?.exposureTime ? Math.round(ceilings.exposureTime) : '?';
+          parts.push(`ET ${Math.round(et)}/${ceilET}µs`);
+        }
+        if (iso != null) {
+          const ceilISO = ceilings?.iso ? Math.round(ceilings.iso) : '?';
+          parts.push(`ISO ${Math.round(iso)}/${ceilISO}`);
+        }
+        this.showInfo('Achromatopsia sim (' + parts.join(' | ') + ')');
+      },
+
       async resetExposure() {
-        this.hasManualExposure = false;
-        if (!this.track.getCapabilities) return;
+        this.isClamped = false;
+        if (!this.track?.getCapabilities) return;
         if (!this.caps) this.caps = this.track.getCapabilities();
         if (this.caps.exposureMode?.includes('continuous')) {
           try {
@@ -167,11 +353,19 @@
         await this.applySimulation();
       },
 
+      async onSeverityChange() {
+        this.severity = this.severityInput.value / 100;
+        if (!this.simulationActive) return;
+        if (this.exposureControlMode === 'range') {
+          await this.tryRangeConstrained();
+        }
+        // For 'clamp' mode, the next pollTick picks up the new ceilings.
+      },
+
       updateCanvasSize() {
         const vw = this.video.videoWidth;
         const vh = this.video.videoHeight;
         if (!vw || !vh) return;
-        // Cap internal resolution for performance; CSS scales to fill screen.
         const scale = Math.min(1, this.MAX_PROCESS_WIDTH / vw);
         this.canvas.width = Math.round(vw * scale);
         this.canvas.height = Math.round(vh * scale);
@@ -190,14 +384,15 @@
           const imgData = ctx.getImageData(0, 0, w, h);
           const data = imgData.data;
           const len = data.length;
-          const needsFallback = !this.hasManualExposure;
+          const needsFallback = this.exposureControlMode === 'none';
 
           for (let i = 0; i < len; i += 4) {
             let lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
 
             if (needsFallback) {
               const t = lum / 255;
-              const blend = 1 / (1 + Math.exp(-12 * (t - 0.6)));
+              const midpoint = 0.3 + 0.4 * (1 - this.severity);
+              const blend = 1 / (1 + Math.exp(-12 * (t - midpoint)));
               lum = lum + blend * (255 - lum);
             }
 
@@ -219,16 +414,17 @@
       showInfo(msg) {
         this.infoDiv.textContent = msg;
         this.infoDiv.style.display = 'block';
-        console.log(msg);
       },
 
       cleanup() {
+        this.stopPolling();
         if (this.rafId) cancelAnimationFrame(this.rafId);
         if (this.stream) this.stream.getTracks().forEach(t => t.stop());
       }
     };
 
     document.getElementById('toggle').addEventListener('click', () => simulator.toggle());
+    document.getElementById('severity').addEventListener('input', () => simulator.onSeverityChange());
 
     let resizeTimeout;
     window.addEventListener('resize', () => {
