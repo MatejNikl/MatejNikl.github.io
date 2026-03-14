@@ -34,27 +34,36 @@
       border-radius: 6px;
       display: none;
     }
-    #toggle {
+    .controls {
       position: absolute;
       top: 10px;
       right: 10px;
-      width: 50px;
-      height: 50px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 10;
+    }
+    .tbtn {
+      width: 44px;
+      height: 44px;
       border-radius: 50%;
-      border: 2px solid rgba(255,255,255,0.6);
+      border: 2px solid rgba(255,255,255,0.3);
       background: rgba(0,0,0,0.5);
-      color: white;
-      font-size: 22px;
-      line-height: 50px;
+      color: #999;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 40px;
       text-align: center;
       cursor: pointer;
       -webkit-tap-highlight-color: transparent;
       user-select: none;
-      z-index: 10;
     }
-    #toggle:active { background: rgba(255,255,255,0.2); }
-    #toggle.normal { border-color: rgba(255,255,255,0.3); opacity: 0.6; }
-    #slider-wrap {
+    .tbtn:active { background: rgba(255,255,255,0.15); }
+    .tbtn.on {
+      border-color: rgba(255,255,255,0.7);
+      color: #fff;
+    }
+    #et-wrap {
       position: absolute;
       bottom: 20px;
       left: 16px;
@@ -66,12 +75,12 @@
       padding: 8px 12px;
       border-radius: 8px;
     }
-    #slider-wrap label {
+    #et-wrap label {
       color: #ccc;
       font-size: 12px;
       white-space: nowrap;
     }
-    #severity {
+    #et-slider {
       flex: 1;
       accent-color: #aaa;
     }
@@ -82,34 +91,36 @@
   <canvas id="canvas"></canvas>
   <div id="error" role="alert"></div>
   <div id="info"></div>
-  <div id="toggle" title="Toggle simulation">&#9681;</div>
-  <div id="slider-wrap">
-    <label id="sev-label-lo" for="severity">mild</label>
-    <input type="range" id="severity" min="0" max="100" value="50">
-    <label id="sev-label-hi" for="severity">severe</label>
+  <div class="controls">
+    <div id="btn-gray" class="tbtn on" title="Grayscale">G</div>
+    <div id="btn-sig" class="tbtn" title="Sigmoid wash-out">S</div>
+  </div>
+  <div id="et-wrap">
+    <label>auto</label>
+    <input type="range" id="et-slider" min="0" max="100" value="0">
+    <label id="et-value">auto</label>
   </div>
   <script>
-    const simulator = {
+    const sim = {
       video: document.getElementById('video'),
       canvas: document.getElementById('canvas'),
       errorDiv: document.getElementById('error'),
       infoDiv: document.getElementById('info'),
-      toggleBtn: document.getElementById('toggle'),
-      sliderWrap: document.getElementById('slider-wrap'),
-      severityInput: document.getElementById('severity'),
+      btnGray: document.getElementById('btn-gray'),
+      btnSig: document.getElementById('btn-sig'),
+      etWrap: document.getElementById('et-wrap'),
+      etSlider: document.getElementById('et-slider'),
+      etValueLabel: document.getElementById('et-value'),
       stream: null,
       track: null,
       rafId: null,
       ctx: null,
-      pollInterval: null,
-      simulationActive: true,
-      exposureControlMode: 'none',
-      isClamped: false,
       caps: null,
-      hasET: false,
-      severity: 0.5,
+      supportsET: false,
+      grayscaleOn: true,
+      sigmoidOn: false,
+      manualET: null,
       MAX_PROCESS_WIDTH: 640,
-      POLL_MS: 500,
 
       async start() {
         if (!navigator.mediaDevices?.getUserMedia) {
@@ -124,7 +135,8 @@
           this.video.srcObject = this.stream;
           this.video.onloadedmetadata = () => {
             this.updateCanvasSize();
-            this.applySimulation();
+            this.detectCapabilities();
+            this.updateInfo();
             this.processFrame();
           };
         } catch (err) {
@@ -132,188 +144,52 @@
         }
       },
 
-      // Compute the ET floor: the minimum exposure time we allow the
-      // camera to use. In bright light the camera wants a very short ET;
-      // we prevent it from going below this floor, forcing over-exposure
-      // that simulates rod saturation.
-      //
-      // severity 0 (mild)   = floor near device min ET (almost no restriction)
-      // severity 1 (severe) = floor near device max ET (heavy restriction)
-      getETFloor() {
-        if (!this.caps?.exposureTime) return null;
+      detectCapabilities() {
+        if (!this.track.getCapabilities) return;
+        this.caps = this.track.getCapabilities();
+        console.log('Camera capabilities:', this.caps);
+
+        this.supportsET = !!(
+          this.caps.exposureMode?.includes('manual') &&
+          this.caps.exposureTime
+        );
+
+        if (this.supportsET) {
+          this.etWrap.style.display = 'flex';
+        }
+      },
+
+      getETFromSlider() {
+        const val = parseInt(this.etSlider.value);
+        if (val === 0) return null;
         const { min, max } = this.caps.exposureTime;
         const logMin = Math.log(min);
         const logMax = Math.log(max);
-        return Math.exp(logMin + this.severity * (logMax - logMin));
+        const t = val / 100;
+        return Math.round(Math.exp(logMin + t * (logMax - logMin)));
       },
 
-      async applySimulation() {
-        if (!this.simulationActive) {
-          this.stopPolling();
+      async onETChange() {
+        const et = this.getETFromSlider();
+        if (et === null) {
+          this.manualET = null;
+          this.etValueLabel.textContent = 'auto';
           await this.resetExposure();
-          this.showInfo('Normal view');
-          this.toggleBtn.classList.add('normal');
-          this.sliderWrap.style.display = 'none';
-          return;
-        }
-
-        this.toggleBtn.classList.remove('normal');
-        await this.initExposureControl();
-      },
-
-      async initExposureControl() {
-        if (!this.track.getCapabilities || !this.track.getSettings) {
-          this.exposureControlMode = 'none';
-          this.sliderWrap.style.display = 'none';
-          this.showInfo('Achromatopsia sim (pixel fallback)');
-          return;
-        }
-        if (!this.caps) this.caps = this.track.getCapabilities();
-        console.log('Camera capabilities:', this.caps);
-
-        const hasManual = this.caps.exposureMode?.includes('manual');
-        const hasContinuous = this.caps.exposureMode?.includes('continuous');
-        this.hasET = !!this.caps.exposureTime;
-
-        if (!hasManual || !this.hasET) {
-          this.exposureControlMode = 'none';
-          this.sliderWrap.style.display = 'none';
-          this.showInfo('Achromatopsia sim (pixel fallback)');
-          return;
-        }
-
-        this.sliderWrap.style.display = 'flex';
-
-        // Strategy A: try range-constrained continuous mode
-        if (hasContinuous && await this.tryRangeConstrained()) {
-          this.exposureControlMode = 'range';
-          return;
-        }
-
-        // Strategy B: polling clamp loop
-        this.exposureControlMode = 'clamp';
-        await this.resetExposure();
-        this.startPolling();
-      },
-
-      async tryRangeConstrained() {
-        const floor = this.getETFloor();
-        if (floor == null) return false;
-
-        const constraint = {
-          exposureMode: 'continuous',
-          exposureTime: {
-            min: Math.round(floor),
-            max: this.caps.exposureTime.max
-          }
-        };
-
-        try {
-          await this.track.applyConstraints({ advanced: [constraint] });
-        } catch (e) {
-          console.warn('Strategy A (range-constrained) rejected:', e);
-          return false;
-        }
-
-        // Verify: wait, then check the actual ET is above our floor.
-        await new Promise(r => setTimeout(r, 600));
-        const settings = this.track.getSettings();
-        const et = settings.exposureTime;
-        if (et != null && et >= floor * 0.9) {
-          this.isClamped = false;
-          this.updateInfoDisplay(settings);
-          console.log('Strategy A working, ET floor', Math.round(floor));
-          return true;
-        }
-
-        console.warn('Strategy A: ET', et, 'below floor', floor, '-- falling back to B');
-        return false;
-      },
-
-      startPolling() {
-        this.stopPolling();
-        this.pollTick();
-        this.pollInterval = setInterval(() => this.pollTick(), this.POLL_MS);
-      },
-
-      stopPolling() {
-        if (this.pollInterval) {
-          clearInterval(this.pollInterval);
-          this.pollInterval = null;
-        }
-      },
-
-      async pollTick() {
-        if (!this.simulationActive || this.exposureControlMode !== 'clamp') return;
-
-        const settings = this.track.getSettings();
-        const floor = this.getETFloor();
-        if (floor == null) return;
-
-        const currentET = settings.exposureTime;
-        if (currentET == null) return;
-
-        const floorET = Math.round(floor);
-        const belowFloor = currentET < floorET;
-
-        if (belowFloor && !this.isClamped) {
-          // Camera chose an ET below our floor -- switch to manual and
-          // force the floor value, preventing the short shutter speed.
+        } else {
+          this.manualET = et;
+          this.etValueLabel.textContent = et + '\xB5s';
           try {
             await this.track.applyConstraints({
-              advanced: [{ exposureMode: 'manual', exposureTime: floorET }]
+              advanced: [{ exposureMode: 'manual', exposureTime: et }]
             });
-            this.isClamped = true;
-          } catch (e) { console.warn('Clamp failed:', e); }
-        } else if (this.isClamped) {
-          // We're currently clamped. Briefly switch to auto to sample
-          // what the camera would choose, then decide if we still need
-          // to clamp.
-          try {
-            await this.track.applyConstraints({
-              advanced: [{ exposureMode: 'continuous' }]
-            });
-          } catch (e) { /* best effort */ }
-
-          // Give auto-exposure a moment to settle
-          await new Promise(r => setTimeout(r, 200));
-          const autoSettings = this.track.getSettings();
-          const autoET = autoSettings.exposureTime;
-
-          if (autoET != null && autoET < floorET) {
-            // Still too bright -- re-clamp
-            try {
-              await this.track.applyConstraints({
-                advanced: [{ exposureMode: 'manual', exposureTime: floorET }]
-              });
-            } catch (e) { /* best effort */ }
-          } else {
-            // Light is dim enough, stay in auto
-            this.isClamped = false;
+          } catch (e) {
+            console.warn('Manual ET failed:', e);
           }
         }
-
-        this.updateInfoDisplay(this.track.getSettings());
-      },
-
-      updateInfoDisplay(settings) {
-        const et = settings?.exposureTime;
-        const floor = this.getETFloor();
-
-        let mode;
-        if (this.exposureControlMode === 'range') mode = 'HW range';
-        else if (this.isClamped) mode = 'clamped';
-        else mode = 'auto';
-
-        let parts = [mode];
-        if (et != null && floor != null) {
-          parts.push(`ET ${Math.round(et)} \u2265 ${Math.round(floor)}\xB5s`);
-        }
-        this.showInfo('Achromatopsia sim (' + parts.join(' | ') + ')');
+        this.updateInfo();
       },
 
       async resetExposure() {
-        this.isClamped = false;
         if (!this.track?.getCapabilities) return;
         if (!this.caps) this.caps = this.track.getCapabilities();
         if (this.caps.exposureMode?.includes('continuous')) {
@@ -325,29 +201,25 @@
         }
       },
 
-      async toggle() {
-        this.simulationActive = !this.simulationActive;
-        await this.applySimulation();
+      toggleGrayscale() {
+        this.grayscaleOn = !this.grayscaleOn;
+        this.btnGray.classList.toggle('on', this.grayscaleOn);
+        this.updateInfo();
       },
 
-      async onSeverityChange() {
-        this.severity = this.severityInput.value / 100;
-        if (!this.simulationActive) return;
-        if (this.exposureControlMode === 'range') {
-          await this.tryRangeConstrained();
-        }
-        if (this.exposureControlMode === 'clamp' && this.isClamped) {
-          // Immediately re-clamp to new floor
-          const floor = this.getETFloor();
-          if (floor != null) {
-            try {
-              await this.track.applyConstraints({
-                advanced: [{ exposureMode: 'manual', exposureTime: Math.round(floor) }]
-              });
-            } catch (e) { /* best effort */ }
-            this.updateInfoDisplay(this.track.getSettings());
-          }
-        }
+      toggleSigmoid() {
+        this.sigmoidOn = !this.sigmoidOn;
+        this.btnSig.classList.toggle('on', this.sigmoidOn);
+        this.updateInfo();
+      },
+
+      updateInfo() {
+        const parts = [];
+        if (this.grayscaleOn) parts.push('grayscale');
+        if (this.manualET != null) parts.push('ET ' + this.manualET + '\xB5s');
+        else if (this.supportsET) parts.push('ET auto');
+        if (this.sigmoidOn) parts.push('sigmoid');
+        this.showInfo(parts.length ? parts.join(' | ') : 'no effects');
       },
 
       updateCanvasSize() {
@@ -368,23 +240,33 @@
 
         ctx.drawImage(this.video, 0, 0, w, h);
 
-        if (this.simulationActive) {
+        const needsPixelWork = this.grayscaleOn || this.sigmoidOn;
+        if (needsPixelWork) {
           const imgData = ctx.getImageData(0, 0, w, h);
           const data = imgData.data;
           const len = data.length;
-          const needsFallback = this.exposureControlMode === 'none';
+          const doGray = this.grayscaleOn;
+          const doSigmoid = this.sigmoidOn;
 
           for (let i = 0; i < len; i += 4) {
-            let lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+            let lum = doGray
+              ? 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]
+              : (data[i] + data[i + 1] + data[i + 2]) / 3;
 
-            if (needsFallback) {
+            if (doSigmoid) {
               const t = lum / 255;
-              const midpoint = 0.3 + 0.4 * (1 - this.severity);
-              const blend = 1 / (1 + Math.exp(-12 * (t - midpoint)));
+              const blend = 1 / (1 + Math.exp(-12 * (t - 0.6)));
               lum = lum + blend * (255 - lum);
             }
 
-            data[i] = data[i + 1] = data[i + 2] = lum;
+            if (doGray) {
+              data[i] = data[i + 1] = data[i + 2] = lum;
+            } else if (doSigmoid) {
+              const scale = lum / ((data[i] + data[i + 1] + data[i + 2]) / 3 || 1);
+              data[i] = Math.min(255, data[i] * scale);
+              data[i + 1] = Math.min(255, data[i + 1] * scale);
+              data[i + 2] = Math.min(255, data[i + 2] * scale);
+            }
           }
 
           ctx.putImageData(imgData, 0, 0);
@@ -405,22 +287,22 @@
       },
 
       cleanup() {
-        this.stopPolling();
         if (this.rafId) cancelAnimationFrame(this.rafId);
         if (this.stream) this.stream.getTracks().forEach(t => t.stop());
       }
     };
 
-    document.getElementById('toggle').addEventListener('click', () => simulator.toggle());
-    document.getElementById('severity').addEventListener('input', () => simulator.onSeverityChange());
+    document.getElementById('btn-gray').addEventListener('click', () => sim.toggleGrayscale());
+    document.getElementById('btn-sig').addEventListener('click', () => sim.toggleSigmoid());
+    document.getElementById('et-slider').addEventListener('input', () => sim.onETChange());
 
     let resizeTimeout;
     window.addEventListener('resize', () => {
       clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(() => simulator.updateCanvasSize(), 100);
+      resizeTimeout = setTimeout(() => sim.updateCanvasSize(), 100);
     });
-    window.addEventListener('unload', () => simulator.cleanup());
-    simulator.start();
+    window.addEventListener('unload', () => sim.cleanup());
+    sim.start();
   </script>
 </body>
 </html>
