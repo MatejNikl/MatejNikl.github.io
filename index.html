@@ -50,7 +50,7 @@
       border: 2px solid rgba(255,255,255,0.3);
       background: rgba(0,0,0,0.5);
       color: #999;
-      font-size: 13px;
+      font-size: 16px;
       font-weight: 700;
       line-height: 40px;
       text-align: center;
@@ -101,10 +101,10 @@
   <div id="error" role="alert"></div>
   <div id="info"></div>
   <div class="controls">
-    <div id="btn-gray" class="tbtn on" title="Grayscale">G</div>
-    <div id="btn-et" class="tbtn hidden" title="Exposure">E</div>
-    <div id="btn-sig" class="tbtn" title="Sigmoid wash-out">S</div>
-    <div id="btn-blur" class="tbtn" title="Blur / Acuity">B</div>
+    <div id="btn-gray" class="tbtn on" title="Grayscale">◐</div>
+    <div id="btn-blur" class="tbtn on" title="Acuity blur">◎</div>
+    <div id="btn-et" class="tbtn hidden" title="Exposure">☀</div>
+    <div id="btn-sig" class="tbtn" title="Wash-out">✦</div>
   </div>
   <div id="sliders">
     <div id="et-row" class="slider-row">
@@ -117,9 +117,9 @@
       <input type="range" id="sig-slider" min="30" max="80" value="60">
       <label id="sig-val" class="val">0.60</label>
     </div>
-    <div id="blur-row" class="slider-row">
+    <div id="blur-row" class="slider-row" style="display:flex">
       <label>VA</label>
-      <input type="range" id="blur-slider" min="5" max="100" value="10" step="5">
+      <input type="range" id="blur-slider" min="5" max="50" value="10" step="5">
       <label id="blur-val" class="val">0.10</label>
     </div>
   </div>
@@ -153,7 +153,7 @@
       sigmoidOn: false,
       manualET: null,
       sigmoidMidpoint: 0.6,
-      blurOn: false,
+      blurOn: true,
       blurVA: 0.10,
       MAX_PROCESS_WIDTH: 640,
 
@@ -306,7 +306,7 @@
         const h = this.canvas.height;
 
         if (this.blurOn) {
-          ctx.filter = 'blur(' + this.getBlurSigma().toFixed(1) + 'px)';
+          ctx.filter = 'blur(' + this.getBlurSigma().toFixed(2) + 'px)';
         }
         ctx.drawImage(this.video, 0, 0, w, h);
         ctx.filter = 'none';
