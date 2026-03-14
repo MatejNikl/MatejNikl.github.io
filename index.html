@@ -104,6 +104,7 @@
     <div id="btn-gray" class="tbtn on" title="Grayscale">G</div>
     <div id="btn-et" class="tbtn hidden" title="Exposure">E</div>
     <div id="btn-sig" class="tbtn" title="Sigmoid wash-out">S</div>
+    <div id="btn-blur" class="tbtn" title="Blur / Acuity">B</div>
   </div>
   <div id="sliders">
     <div id="et-row" class="slider-row">
@@ -115,6 +116,11 @@
       <label>thr</label>
       <input type="range" id="sig-slider" min="30" max="80" value="60">
       <label id="sig-val" class="val">0.60</label>
+    </div>
+    <div id="blur-row" class="slider-row">
+      <label>VA</label>
+      <input type="range" id="blur-slider" min="5" max="100" value="10" step="5">
+      <label id="blur-val" class="val">0.10</label>
     </div>
   </div>
   <script>
@@ -132,6 +138,10 @@
       sigRow: document.getElementById('sig-row'),
       sigSlider: document.getElementById('sig-slider'),
       sigVal: document.getElementById('sig-val'),
+      btnBlur: document.getElementById('btn-blur'),
+      blurRow: document.getElementById('blur-row'),
+      blurSlider: document.getElementById('blur-slider'),
+      blurVal: document.getElementById('blur-val'),
       stream: null,
       track: null,
       rafId: null,
@@ -143,6 +153,8 @@
       sigmoidOn: false,
       manualET: null,
       sigmoidMidpoint: 0.6,
+      blurOn: false,
+      blurVA: 0.10,
       MAX_PROCESS_WIDTH: 640,
 
       async start() {
@@ -250,11 +262,30 @@
         this.updateInfo();
       },
 
+      toggleBlur() {
+        this.blurOn = !this.blurOn;
+        this.btnBlur.classList.toggle('on', this.blurOn);
+        this.blurRow.style.display = this.blurOn ? 'flex' : 'none';
+        this.updateInfo();
+      },
+
+      onBlurChange() {
+        this.blurVA = parseInt(this.blurSlider.value) / 100;
+        this.blurVal.textContent = this.blurVA.toFixed(2);
+        this.updateInfo();
+      },
+
+      getBlurSigma() {
+        const K = 0.4;
+        return (1 / this.blurVA - 1) * K;
+      },
+
       updateInfo() {
         const parts = [];
         if (this.grayscaleOn) parts.push('grayscale');
         if (this.etOn && this.manualET != null) parts.push('ET ' + this.manualET + '\xB5s');
         if (this.sigmoidOn) parts.push('sigmoid (' + this.sigmoidMidpoint.toFixed(2) + ')');
+        if (this.blurOn) parts.push('VA ' + this.blurVA.toFixed(2));
         this.showInfo(parts.length ? parts.join(' | ') : 'no effects');
       },
 
@@ -274,7 +305,11 @@
         const w = this.canvas.width;
         const h = this.canvas.height;
 
+        if (this.blurOn) {
+          ctx.filter = 'blur(' + this.getBlurSigma().toFixed(1) + 'px)';
+        }
         ctx.drawImage(this.video, 0, 0, w, h);
+        ctx.filter = 'none';
 
         const doGray = this.grayscaleOn;
         const doSigmoid = this.sigmoidOn;
@@ -332,8 +367,10 @@
     document.getElementById('btn-gray').addEventListener('click', () => sim.toggleGrayscale());
     document.getElementById('btn-et').addEventListener('click', () => sim.toggleET());
     document.getElementById('btn-sig').addEventListener('click', () => sim.toggleSigmoid());
+    document.getElementById('btn-blur').addEventListener('click', () => sim.toggleBlur());
     document.getElementById('et-slider').addEventListener('input', () => sim.applyET());
     document.getElementById('sig-slider').addEventListener('input', () => sim.onSigmoidThresholdChange());
+    document.getElementById('blur-slider').addEventListener('input', () => sim.onBlurChange());
 
     let resizeTimeout;
     window.addEventListener('resize', () => {
