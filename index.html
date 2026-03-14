@@ -104,9 +104,14 @@
     <div id="btn-gray" class="tbtn on" title="Grayscale">G</div>
     <div id="btn-blur" class="tbtn on" title="Acuity blur">B</div>
     <div id="btn-et" class="tbtn hidden" title="Exposure">E</div>
-    <div id="btn-sig" class="tbtn" title="Wash-out">S</div>
+    <div id="btn-sig" class="tbtn" title="Wash-out">W</div>
   </div>
   <div id="sliders">
+    <div id="blur-row" class="slider-row" style="display:flex">
+      <label>VA</label>
+      <input type="range" id="blur-slider" min="5" max="50" value="10" step="5">
+      <label id="blur-val" class="val">0.10</label>
+    </div>
     <div id="et-row" class="slider-row">
       <label>ET</label>
       <input type="range" id="et-slider" min="1" max="100" value="50">
@@ -116,11 +121,6 @@
       <label>thr</label>
       <input type="range" id="sig-slider" min="30" max="80" value="60">
       <label id="sig-val" class="val">0.50</label>
-    </div>
-    <div id="blur-row" class="slider-row" style="display:flex">
-      <label>VA</label>
-      <input type="range" id="blur-slider" min="5" max="50" value="10" step="5">
-      <label id="blur-val" class="val">0.10</label>
     </div>
   </div>
   <script>
@@ -283,9 +283,9 @@
       updateInfo() {
         const parts = [];
         if (this.grayscaleOn) parts.push('grayscale');
-        if (this.etOn && this.manualET != null) parts.push('ET ' + this.manualET + '\xB5s');
-        if (this.sigmoidOn) parts.push('sigmoid (' + this.sigmoidMidpoint.toFixed(2) + ')');
         if (this.blurOn) parts.push('VA ' + this.blurVA.toFixed(2));
+        if (this.etOn && this.manualET != null) parts.push('ET ' + this.manualET + '\xB5s');
+        if (this.sigmoidOn) parts.push('glare (' + this.sigmoidMidpoint.toFixed(2) + ')');
         this.showInfo(parts.length ? parts.join(' | ') : 'no effects');
       },
 
