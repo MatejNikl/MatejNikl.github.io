@@ -50,7 +50,7 @@
       border: 2px solid rgba(255,255,255,0.3);
       background: rgba(0,0,0,0.5);
       color: #999;
-      font-size: 16px;
+      font-size: 13px;
       font-weight: 700;
       line-height: 40px;
       text-align: center;
@@ -101,10 +101,10 @@
   <div id="error" role="alert"></div>
   <div id="info"></div>
   <div class="controls">
-    <div id="btn-gray" class="tbtn on" title="Grayscale">◐</div>
-    <div id="btn-blur" class="tbtn on" title="Acuity blur">◎</div>
-    <div id="btn-et" class="tbtn hidden" title="Exposure">☀</div>
-    <div id="btn-sig" class="tbtn" title="Wash-out">✦</div>
+    <div id="btn-gray" class="tbtn on" title="Grayscale">G</div>
+    <div id="btn-blur" class="tbtn on" title="Acuity blur">B</div>
+    <div id="btn-et" class="tbtn hidden" title="Exposure">E</div>
+    <div id="btn-sig" class="tbtn" title="Wash-out">S</div>
   </div>
   <div id="sliders">
     <div id="et-row" class="slider-row">
@@ -115,7 +115,7 @@
     <div id="sig-row" class="slider-row">
       <label>thr</label>
       <input type="range" id="sig-slider" min="30" max="80" value="60">
-      <label id="sig-val" class="val">0.60</label>
+      <label id="sig-val" class="val">0.50</label>
     </div>
     <div id="blur-row" class="slider-row" style="display:flex">
       <label>VA</label>
@@ -152,7 +152,7 @@
       etOn: false,
       sigmoidOn: false,
       manualET: null,
-      sigmoidMidpoint: 0.6,
+      sigmoidMidpoint: 0.50,
       blurOn: true,
       blurVA: 0.10,
       MAX_PROCESS_WIDTH: 640,
@@ -257,7 +257,7 @@
       },
 
       onSigmoidThresholdChange() {
-        this.sigmoidMidpoint = parseInt(this.sigSlider.value) / 100;
+        this.sigmoidMidpoint = (110 - parseInt(this.sigSlider.value)) / 100;
         this.sigVal.textContent = this.sigmoidMidpoint.toFixed(2);
         this.updateInfo();
       },
