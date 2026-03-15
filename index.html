@@ -110,11 +110,11 @@
   <div id="error" role="alert"></div>
   <div id="info"></div>
   <div class="controls">
-    <div id="btn-cam" class="tbtn hidden" title="Switch camera">C</div>
     <div id="btn-gray" class="tbtn on" title="Grayscale">G</div>
     <div id="btn-blur" class="tbtn on" title="Acuity blur">B</div>
     <div id="btn-et" class="tbtn hidden" title="Exposure">E</div>
     <div id="btn-sig" class="tbtn" title="Glare">L</div>
+    <div id="btn-cam" class="tbtn hidden" title="Switch camera">C</div>
   </div>
   <div id="sliders">
     <div id="gray-row" class="slider-row" style="display:flex">
@@ -230,18 +230,37 @@
       async enumerateCameras() {
         if (!navigator.mediaDevices?.enumerateDevices) return;
         const devices = await navigator.mediaDevices.enumerateDevices();
-        this.cameras = devices.filter(d => d.kind === 'videoinput');
-        if (this.cameras.length > 1) {
-          this.btnCam.classList.remove('hidden');
-          const currentId = this.track?.getSettings()?.deviceId;
-          this.cameraIndex = this.cameras.findIndex(c => c.deviceId === currentId);
-          if (this.cameraIndex === -1) this.cameraIndex = 0;
-        }
+        const allVideo = devices.filter(d => d.kind === 'videoinput');
+
+        this.cameras = allVideo.filter(d => {
+          if (typeof d.getCapabilities === 'function') {
+            const caps = d.getCapabilities();
+            if (caps.facingMode?.length) return caps.facingMode.includes('environment');
+          }
+          return /back|environment/i.test(d.label);
+        });
+        if (!this.cameras.length) this.cameras = allVideo;
+
+        this.cameras.sort((a, b) => {
+          const idA = a.label.match(/camera\s*(\d+)/i);
+          const idB = b.label.match(/camera\s*(\d+)/i);
+          return (idA ? +idA[1] : 999) - (idB ? +idB[1] : 999);
+        });
+
+        if (this.cameras.length > 1) this.btnCam.classList.remove('hidden');
+
+        const currentId = this.track?.getSettings()?.deviceId;
+        this.cameraIndex = this.cameras.findIndex(c => c.deviceId === currentId);
+        if (this.cameraIndex === -1) this.cameraIndex = 0;
+
+        if (this.cameraIndex !== 0) await this.switchCamera(0);
       },
 
-      async switchCamera() {
+      async switchCamera(targetIndex) {
         if (this.cameras.length < 2) return;
-        this.cameraIndex = (this.cameraIndex + 1) % this.cameras.length;
+        this.cameraIndex = targetIndex !== undefined
+          ? targetIndex
+          : (this.cameraIndex + 1) % this.cameras.length;
         const deviceId = this.cameras[this.cameraIndex].deviceId;
         if (this.stream) {
           this.stream.getTracks().forEach(t => t.stop());
