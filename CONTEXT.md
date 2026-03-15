@@ -167,29 +167,42 @@ setting `srcObject` ensure playback starts across all browsers.
 - **Glare (L button)**: Sigmoid wash-out simulating photophobia / light
   sensitivity. Applies `1/(1+exp(-12*(t-mid)))` blend toward white. Adjustable
   midpoint threshold.
-- **Exposure (E button)**: Manual exposure time control via
+- **Exposure (E button)**: Manual exposure time and ISO control via
   `MediaStreamTrack.applyConstraints`. Only shown when the camera supports manual
-  exposure mode. Logarithmic slider mapping.
+  exposure mode. Two logarithmic sliders appear: ET and ISO.
 
-  When manual ET is active, ISO is fixed at 400 (clamped to the hardware range).
-  This models rod sensitivity: rods are highly sensitive receptors (high ISO
-  equivalent) that work well in dim light but cannot reduce their sensitivity
-  enough for daylight. Fixing a moderately high ISO means a dim room looks
-  normal, while outdoor scenes blow out — matching the achromat's experience.
+  The ET and ISO sliders are coupled so that the combination is guaranteed to
+  start producing wash-out at approximately 1000 lux — the illuminance at which
+  rod saturation overwhelms an achromat's vision.
 
-  Without fixing ISO, the camera auto-adjusts it when switching to manual ET,
-  snapshotting whatever value auto-exposure was using. This caused inconsistent
-  behavior: entering manual mode indoors (where auto-ISO is high) and then
-  going outside produced an over-exposed image, but re-toggling ET outdoors
-  (where auto-ISO resets lower) made the same ET value look normal. Fixing ISO
-  eliminates this dependence on when the user toggles the mode.
+  The coupling uses the incident-light exposure formula `t = N² × C / (E × S)`,
+  where `N` is the f-number (aperture), `C` is a calibration constant, `E` is
+  illuminance (lux), and `S` is ISO. Rearranging for the ET floor:
 
-  The ET slider has a floor of 250 µs — the slider range maps from
-  `max(hardwareMin, 250)` to `hardwareMax`. This prevents the user from
-  simulating "adapting down" more than rods physically can. The value was chosen
-  empirically: on the Samsung S22, 1000 µs already over-exposes a dim room (due
-  to auto-ISO compensation), so 250 µs corresponds roughly to the ~1000 lux
-  threshold where rod saturation overwhelms an achromat's vision.
+  ```
+  ET_floor [µs] = N² × C_emp × 1e6 / (E_overwhelm × ISO)
+  ```
+
+  The standard calibration constant is `C = 250`, but phone camera ISP pipelines
+  (tone mapping, auto-gain) make the image brighter than a raw sensor reading.
+  Empirical testing on the Samsung S22 (f/1.8) showed that ISO 400 + 250 µs
+  already produces overwhelm at ~1000 lux, whereas the standard formula predicts
+  ~2025 µs. Solving backwards gives `C_emp ≈ 30.86`.
+
+  The aperture `N` is hardcoded at 1.8 (typical main camera on modern phones).
+  The Web API (`getSettings()`) does not expose f-number, so per-lens adjustment
+  is not possible. On multi-camera phones the telephoto may have f/2.4, which
+  would shift the ET floor — but since we can't detect it, the calibration is
+  slightly off for non-primary lenses.
+
+  When the user changes ISO, the ET floor is recomputed. If the current ET is
+  below the new floor, the ET slider snaps up to the floor position. This
+  ensures the ~1000 lux overwhelm point is maintained regardless of ISO.
+
+  ISO defaults to 400 when entering manual mode. Higher ISO (e.g., 800)
+  simulates greater rod sensitivity but lowers the ET floor (more easily
+  overwhelmed). Lower ISO (e.g., 200) raises the ET floor (less easily
+  overwhelmed).
 
 ## Known issues
 

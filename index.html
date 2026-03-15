@@ -134,6 +134,11 @@
       <input type="range" id="et-slider" min="1" max="100" value="50">
       <label id="et-val" class="val">--</label>
     </div>
+    <div id="iso-row" class="slider-row">
+      <label>ISO</label>
+      <input type="range" id="iso-slider" min="1" max="100" value="50">
+      <label id="iso-val" class="val">--</label>
+    </div>
     <div id="sig-row" class="slider-row">
       <label>thr</label>
       <input type="range" id="sig-slider" min="30" max="80" value="60">
@@ -206,6 +211,9 @@ void main() {
       etRow: document.getElementById('et-row'),
       etSlider: document.getElementById('et-slider'),
       etVal: document.getElementById('et-val'),
+      isoRow: document.getElementById('iso-row'),
+      isoSlider: document.getElementById('iso-slider'),
+      isoVal: document.getElementById('iso-val'),
       sigRow: document.getElementById('sig-row'),
       sigSlider: document.getElementById('sig-slider'),
       sigVal: document.getElementById('sig-val'),
@@ -228,7 +236,8 @@ void main() {
       useCanvasWorkaround: false,
       caps: null,
       supportsET: false,
-      fixedISO: null,
+      supportsISO: false,
+      aperture: 1.8,
       grayscaleOn: true,
       grayMode: 'scotopic',
       etOn: false,
@@ -369,15 +378,17 @@ void main() {
           this.caps.exposureMode?.includes('manual') &&
           this.caps.exposureTime
         );
+        this.supportsISO = !!(this.caps.iso);
 
         if (this.supportsET) {
           this.btnET.classList.remove('hidden');
         }
 
-        const TARGET_ISO = 400;
-        if (this.caps.iso) {
-          this.fixedISO = Math.max(this.caps.iso.min,
-            Math.min(TARGET_ISO, this.caps.iso.max));
+        this.aperture = 1.8;
+        console.log('Aperture (assumed):', this.aperture);
+
+        if (this.supportsISO) {
+          this.setISOSliderTo(400);
         }
       },
 
@@ -442,15 +453,62 @@ void main() {
         }
       },
 
+      getETFloor() {
+        const C_EMP = 30.86;
+        const E_OVERWHELM = 1000;
+        const N = this.aperture;
+        const iso = this.getISOFromSlider();
+        return N * N * C_EMP * 1e6 / (E_OVERWHELM * iso);
+      },
+
+      getISOFromSlider() {
+        if (!this.supportsISO) return 400;
+        const val = parseInt(this.isoSlider.value);
+        const { min, max } = this.caps.iso;
+        const logMin = Math.log(min);
+        const logMax = Math.log(max);
+        const t = (val - 1) / 99;
+        return Math.round(Math.exp(logMin + t * (logMax - logMin)));
+      },
+
+      setISOSliderTo(target) {
+        if (!this.supportsISO) return;
+        const { min, max } = this.caps.iso;
+        const clamped = Math.max(min, Math.min(target, max));
+        const logMin = Math.log(min);
+        const logMax = Math.log(max);
+        const t = (Math.log(clamped) - logMin) / (logMax - logMin);
+        this.isoSlider.value = Math.round(1 + t * 99);
+        this.isoVal.textContent = this.getISOFromSlider();
+      },
+
+      setETSliderTo(target) {
+        const { min, max } = this.caps.exposureTime;
+        const etFloor = this.getETFloor();
+        const effectiveMin = Math.max(min, etFloor);
+        const clamped = Math.max(effectiveMin, Math.min(target, max));
+        const logMin = Math.log(effectiveMin);
+        const logMax = Math.log(max);
+        const t = (Math.log(clamped) - logMin) / (logMax - logMin);
+        this.etSlider.value = Math.round(1 + t * 99);
+      },
+
       getETFromSlider() {
         const val = parseInt(this.etSlider.value);
         const { min, max } = this.caps.exposureTime;
-        const ET_FLOOR = 250;
-        const effectiveMin = Math.max(min, ET_FLOOR);
+        const etFloor = this.getETFloor();
+        const effectiveMin = Math.max(min, etFloor);
         const logMin = Math.log(effectiveMin);
         const logMax = Math.log(max);
         const t = (val - 1) / 99;
         return Math.round(Math.exp(logMin + t * (logMax - logMin)));
+      },
+
+      async onISOChange() {
+        this.isoVal.textContent = this.getISOFromSlider();
+        const prevET = this.manualET || this.getETFromSlider();
+        this.setETSliderTo(prevET);
+        await this.applyET();
       },
 
       async applyET() {
@@ -458,7 +516,7 @@ void main() {
         this.manualET = et;
         this.etVal.textContent = et + '\xB5s';
         const constraint = { exposureMode: 'manual', exposureTime: et };
-        if (this.fixedISO != null) constraint.iso = this.fixedISO;
+        if (this.supportsISO) constraint.iso = this.getISOFromSlider();
         try {
           await this.track.applyConstraints({ advanced: [constraint] });
         } catch (e) {
@@ -485,9 +543,11 @@ void main() {
         this.btnET.classList.toggle('on', this.etOn);
         if (this.etOn) {
           this.etRow.style.display = 'flex';
+          if (this.supportsISO) this.isoRow.style.display = 'flex';
           await this.applyET();
         } else {
           this.etRow.style.display = 'none';
+          this.isoRow.style.display = 'none';
           await this.resetExposure();
           this.updateInfo();
         }
@@ -556,7 +616,7 @@ void main() {
         if (this.blurOn) parts.push('VA ' + this.blurVA.toFixed(2));
         if (this.etOn && this.manualET != null) {
           let etInfo = 'ET ' + this.manualET + '\xB5s';
-          if (this.fixedISO != null) etInfo += ' ISO ' + this.fixedISO;
+          if (this.supportsISO) etInfo += ' ISO ' + this.getISOFromSlider();
           parts.push(etInfo);
         }
         if (this.sigmoidOn) parts.push('glare (' + this.sigmoidMidpoint.toFixed(2) + ')');
@@ -637,6 +697,7 @@ void main() {
     document.getElementById('btn-blur').addEventListener('click', () => sim.toggleBlur());
     document.getElementById('btn-cam').addEventListener('click', () => sim.switchCamera());
     document.getElementById('et-slider').addEventListener('input', () => sim.applyET());
+    document.getElementById('iso-slider').addEventListener('input', () => sim.onISOChange());
     document.getElementById('sig-slider').addEventListener('input', () => sim.onSigmoidThresholdChange());
     document.getElementById('blur-slider').addEventListener('input', () => sim.onBlurChange());
     document.getElementById('gray-mode').addEventListener('change', () => sim.onGrayModeChange());
