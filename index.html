@@ -119,9 +119,8 @@
     <div id="gray-row" class="slider-row" style="display:flex">
       <label>mode</label>
       <select id="gray-mode">
-        <option value="scotopic" selected>scotopic</option>
-        <option value="scotopic-lin">scotopic + linear</option>
-        <option value="rec601">rec. 601</option>
+        <option value="scotopic" selected>scotopic (rod vision)</option>
+        <option value="rec601">rec. 601 (standard B&W)</option>
       </select>
     </div>
     <div id="blur-row" class="slider-row" style="display:flex">
@@ -360,11 +359,9 @@
               lum = (data[i] + data[i + 1] + data[i + 2]) / 3;
             } else if (mode === 'rec601') {
               lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-            } else if (mode === 'scotopic-lin') {
-              const linLum = Math.max(0, -0.0908 * s2l[data[i]] + 0.7408 * s2l[data[i + 1]] + 0.3500 * s2l[data[i + 2]]);
-              lum = 255 * (linLum <= 0.0031308 ? 12.92 * linLum : 1.055 * Math.pow(linLum, 1 / 2.4) - 0.055);
             } else {
-              lum = Math.max(0, Math.min(255, -0.0908 * data[i] + 0.7408 * data[i + 1] + 0.3500 * data[i + 2]));
+              const linLum = 0.007 * s2l[data[i]] + 0.519 * s2l[data[i + 1]] + 0.474 * s2l[data[i + 2]];
+              lum = 255 * (linLum <= 0.0031308 ? 12.92 * linLum : 1.055 * Math.pow(linLum, 1 / 2.4) - 0.055);
             }
 
             if (doSigmoid) {
