@@ -198,14 +198,15 @@
           });
           this.track = this.stream.getVideoTracks()[0];
           this.video.srcObject = this.stream;
-          this.video.onloadedmetadata = () => {
+          this.video.onloadedmetadata = async () => {
             this.updateCanvasSize();
             this.updateBlurCSS();
             this.detectCapabilities();
-            this.enumerateCameras();
+            await this.enumerateCameras();
             this.updateInfo();
             this.processFrame();
           };
+          await this.video.play();
         } catch (err) {
           this.showError(`Camera failed: ${err.message}`);
         }
@@ -260,6 +261,7 @@
               this.detectCapabilities();
               this.updateInfo();
             };
+            await this.video.play();
             return;
           } catch (err) {
             if (attempt === 2) this.showError('Camera switch failed: ' + err.message);
