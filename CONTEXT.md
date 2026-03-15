@@ -62,6 +62,15 @@ CSS `filter: blur()` on the `<canvas>` HTML element works on all browsers since
 Safari 6 (2012). It applies after canvas rendering, which is fine since the blur
 doesn't need to feed back into the pixel processing.
 
+## Camera resolution
+
+`getUserMedia` is called with `width: { ideal: 1920 }, height: { ideal: 1080 }`
+to request 1080p from the camera. Using `ideal` (not `exact`) ensures the request
+never fails — the browser negotiates the closest supported resolution. Without
+these constraints, most mobile browsers default to 640×480.
+
+The actual resolution is shown in the info overlay (e.g. `1080×1920`).
+
 ## Camera handling
 
 ### Multi-camera devices
