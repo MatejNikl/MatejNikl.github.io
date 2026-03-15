@@ -54,7 +54,6 @@
     }
     #settings-panel {
       position: absolute;
-      top: 54px;
       right: 10px;
       background: rgba(0,0,0,0.8);
       border: 1px solid rgba(255,255,255,0.15);
@@ -148,10 +147,10 @@
   <canvas id="canvas"></canvas>
   <div id="error" role="alert"></div>
   <div class="controls">
-    <div id="btn-settings" class="pill pill-gear" title="Settings">&#x2699;</div>
     <div id="btn-gray" class="pill on">Rod vision</div>
     <div id="btn-blur" class="pill on">Blur</div>
     <div id="btn-et" class="pill hidden">Exposure</div>
+    <div id="btn-settings" class="pill pill-gear" title="Settings">&#x2699;</div>
   </div>
   <div id="settings-panel">
     <div class="settings-row">
@@ -670,6 +669,10 @@ void main() {
 
       toggleSettings() {
         this.settingsOpen = !this.settingsOpen;
+        if (this.settingsOpen) {
+          const rect = this.btnSettings.getBoundingClientRect();
+          this.settingsPanel.style.top = (rect.bottom + 6) + 'px';
+        }
         this.settingsPanel.style.display = this.settingsOpen ? 'flex' : 'none';
         this.btnSettings.classList.toggle('on', this.settingsOpen);
       },
