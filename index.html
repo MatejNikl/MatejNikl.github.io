@@ -105,7 +105,7 @@
   </style>
 </head>
 <body>
-  <video id="video" autoplay playsinline></video>
+  <video id="video" autoplay playsinline muted></video>
   <canvas id="canvas"></canvas>
   <div id="error" role="alert"></div>
   <div id="info"></div>
@@ -114,6 +114,7 @@
     <div id="btn-blur" class="tbtn on" title="Acuity blur">B</div>
     <div id="btn-et" class="tbtn hidden" title="Exposure">E</div>
     <div id="btn-sig" class="tbtn" title="Wash-out">W</div>
+    <div id="btn-cam" class="tbtn hidden" title="Switch camera">C</div>
   </div>
   <div id="sliders">
     <div id="gray-row" class="slider-row" style="display:flex">
@@ -160,6 +161,7 @@
       blurRow: document.getElementById('blur-row'),
       blurSlider: document.getElementById('blur-slider'),
       blurVal: document.getElementById('blur-val'),
+      btnCam: document.getElementById('btn-cam'),
       stream: null,
       track: null,
       rafId: null,
@@ -175,6 +177,8 @@
       sigmoidMidpoint: 0.50,
       blurOn: true,
       blurVA: 0.10,
+      cameras: [],
+      cameraIndex: -1,
       MAX_PROCESS_WIDTH: 640,
 
       async start() {
@@ -196,7 +200,9 @@
           this.video.srcObject = this.stream;
           this.video.onloadedmetadata = () => {
             this.updateCanvasSize();
+            this.updateBlurCSS();
             this.detectCapabilities();
+            this.enumerateCameras();
             this.updateInfo();
             this.processFrame();
           };
@@ -217,6 +223,40 @@
 
         if (this.supportsET) {
           this.btnET.classList.remove('hidden');
+        }
+      },
+
+      async enumerateCameras() {
+        if (!navigator.mediaDevices?.enumerateDevices) return;
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        this.cameras = devices.filter(d => d.kind === 'videoinput');
+        if (this.cameras.length > 1) {
+          this.btnCam.classList.remove('hidden');
+          const currentId = this.track?.getSettings()?.deviceId;
+          this.cameraIndex = this.cameras.findIndex(c => c.deviceId === currentId);
+          if (this.cameraIndex === -1) this.cameraIndex = 0;
+        }
+      },
+
+      async switchCamera() {
+        if (this.cameras.length < 2) return;
+        this.cameraIndex = (this.cameraIndex + 1) % this.cameras.length;
+        const deviceId = this.cameras[this.cameraIndex].deviceId;
+        if (this.stream) this.stream.getTracks().forEach(t => t.stop());
+        try {
+          this.stream = await navigator.mediaDevices.getUserMedia({
+            video: { deviceId: { exact: deviceId } }
+          });
+          this.track = this.stream.getVideoTracks()[0];
+          this.video.srcObject = this.stream;
+          this.video.onloadedmetadata = () => {
+            this.updateCanvasSize();
+            this.updateBlurCSS();
+            this.detectCapabilities();
+            this.updateInfo();
+          };
+        } catch (err) {
+          this.showError('Camera switch failed: ' + err.message);
         }
       },
 
@@ -298,18 +338,32 @@
         this.blurOn = !this.blurOn;
         this.btnBlur.classList.toggle('on', this.blurOn);
         this.blurRow.style.display = this.blurOn ? 'flex' : 'none';
+        this.updateBlurCSS();
         this.updateInfo();
       },
 
       onBlurChange() {
         this.blurVA = parseInt(this.blurSlider.value) / 100;
         this.blurVal.textContent = this.blurVA.toFixed(2);
+        this.updateBlurCSS();
         this.updateInfo();
+      },
+
+      updateBlurCSS() {
+        this.canvas.style.filter = this.blurOn
+          ? 'blur(' + this.getBlurSigma().toFixed(2) + 'px)'
+          : 'none';
       },
 
       getBlurSigma() {
         const K = 0.3;
         return (1 / this.blurVA - 1) * K;
+      },
+
+      getCameraLabel() {
+        if (this.cameraIndex < 0 || !this.cameras[this.cameraIndex]) return '';
+        const label = this.cameras[this.cameraIndex].label || '';
+        return label.length > 30 ? label.substring(0, 30) + '\u2026' : label;
       },
 
       updateInfo() {
@@ -318,6 +372,8 @@
         if (this.blurOn) parts.push('VA ' + this.blurVA.toFixed(2));
         if (this.etOn && this.manualET != null) parts.push('ET ' + this.manualET + '\xB5s');
         if (this.sigmoidOn) parts.push('glare (' + this.sigmoidMidpoint.toFixed(2) + ')');
+        const cam = this.getCameraLabel();
+        if (cam) parts.push(cam);
         this.showInfo(parts.length ? parts.join(' | ') : 'no effects');
       },
 
@@ -337,11 +393,7 @@
         const w = this.canvas.width;
         const h = this.canvas.height;
 
-        if (this.blurOn) {
-          ctx.filter = 'blur(' + this.getBlurSigma().toFixed(2) + 'px)';
-        }
         ctx.drawImage(this.video, 0, 0, w, h);
-        ctx.filter = 'none';
 
         const doGray = this.grayscaleOn;
         const doSigmoid = this.sigmoidOn;
@@ -408,6 +460,7 @@
     document.getElementById('btn-et').addEventListener('click', () => sim.toggleET());
     document.getElementById('btn-sig').addEventListener('click', () => sim.toggleSigmoid());
     document.getElementById('btn-blur').addEventListener('click', () => sim.toggleBlur());
+    document.getElementById('btn-cam').addEventListener('click', () => sim.switchCamera());
     document.getElementById('et-slider').addEventListener('input', () => sim.applyET());
     document.getElementById('sig-slider').addEventListener('input', () => sim.onSigmoidThresholdChange());
     document.getElementById('blur-slider').addEventListener('input', () => sim.onBlurChange());
