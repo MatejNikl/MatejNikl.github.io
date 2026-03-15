@@ -171,6 +171,26 @@ setting `srcObject` ensure playback starts across all browsers.
   `MediaStreamTrack.applyConstraints`. Only shown when the camera supports manual
   exposure mode. Logarithmic slider mapping.
 
+  When manual ET is active, ISO is fixed at 400 (clamped to the hardware range).
+  This models rod sensitivity: rods are highly sensitive receptors (high ISO
+  equivalent) that work well in dim light but cannot reduce their sensitivity
+  enough for daylight. Fixing a moderately high ISO means a dim room looks
+  normal, while outdoor scenes blow out — matching the achromat's experience.
+
+  Without fixing ISO, the camera auto-adjusts it when switching to manual ET,
+  snapshotting whatever value auto-exposure was using. This caused inconsistent
+  behavior: entering manual mode indoors (where auto-ISO is high) and then
+  going outside produced an over-exposed image, but re-toggling ET outdoors
+  (where auto-ISO resets lower) made the same ET value look normal. Fixing ISO
+  eliminates this dependence on when the user toggles the mode.
+
+  The ET slider has a floor of 250 µs — the slider range maps from
+  `max(hardwareMin, 250)` to `hardwareMax`. This prevents the user from
+  simulating "adapting down" more than rods physically can. The value was chosen
+  empirically: on the Samsung S22, 1000 µs already over-exposes a dim room (due
+  to auto-ISO compensation), so 250 µs corresponds roughly to the ~1000 lux
+  threshold where rod saturation overwhelms an achromat's vision.
+
 ## Known issues
 
 - iOS Safari (not Chrome) may still show a frozen first frame on initial load.

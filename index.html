@@ -228,6 +228,7 @@ void main() {
       useCanvasWorkaround: false,
       caps: null,
       supportsET: false,
+      fixedISO: null,
       grayscaleOn: true,
       grayMode: 'scotopic',
       etOn: false,
@@ -372,6 +373,12 @@ void main() {
         if (this.supportsET) {
           this.btnET.classList.remove('hidden');
         }
+
+        const TARGET_ISO = 400;
+        if (this.caps.iso) {
+          this.fixedISO = Math.max(this.caps.iso.min,
+            Math.min(TARGET_ISO, this.caps.iso.max));
+        }
       },
 
       async enumerateCameras() {
@@ -438,7 +445,9 @@ void main() {
       getETFromSlider() {
         const val = parseInt(this.etSlider.value);
         const { min, max } = this.caps.exposureTime;
-        const logMin = Math.log(min);
+        const ET_FLOOR = 250;
+        const effectiveMin = Math.max(min, ET_FLOOR);
+        const logMin = Math.log(effectiveMin);
         const logMax = Math.log(max);
         const t = (val - 1) / 99;
         return Math.round(Math.exp(logMin + t * (logMax - logMin)));
@@ -448,10 +457,10 @@ void main() {
         const et = this.getETFromSlider();
         this.manualET = et;
         this.etVal.textContent = et + '\xB5s';
+        const constraint = { exposureMode: 'manual', exposureTime: et };
+        if (this.fixedISO != null) constraint.iso = this.fixedISO;
         try {
-          await this.track.applyConstraints({
-            advanced: [{ exposureMode: 'manual', exposureTime: et }]
-          });
+          await this.track.applyConstraints({ advanced: [constraint] });
         } catch (e) {
           console.warn('Manual ET failed:', e);
         }
@@ -545,7 +554,11 @@ void main() {
         const parts = [];
         if (this.grayscaleOn) parts.push('grayscale (' + this.grayMode + ')');
         if (this.blurOn) parts.push('VA ' + this.blurVA.toFixed(2));
-        if (this.etOn && this.manualET != null) parts.push('ET ' + this.manualET + '\xB5s');
+        if (this.etOn && this.manualET != null) {
+          let etInfo = 'ET ' + this.manualET + '\xB5s';
+          if (this.fixedISO != null) etInfo += ' ISO ' + this.fixedISO;
+          parts.push(etInfo);
+        }
         if (this.sigmoidOn) parts.push('glare (' + this.sigmoidMidpoint.toFixed(2) + ')');
         const vw = this.video.videoWidth;
         const vh = this.video.videoHeight;
