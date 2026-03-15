@@ -214,6 +214,13 @@ setting `srcObject` ensure playback starts across all browsers.
 
 ## Known issues
 
+- **Manual exposure (E button) is Android Chrome only.** The `exposureTime` and
+  `iso` capabilities in `MediaStreamTrack.getCapabilities()` are part of the
+  W3C mediacapture-image spec but only implemented in Chrome on Android (since
+  Chrome 72). iOS Safari does not support them — all iOS browsers use WebKit,
+  which has no `exposureTime` or `iso` implementation. The E button correctly
+  does not appear on iOS because the capability detection finds neither
+  property. There is no web API workaround for manual shutter speed on iOS.
 - iOS Safari (not Chrome) may still show a frozen first frame on initial load.
   Cycling cameras via the C button works around this.
 - `InputDeviceInfo.getCapabilities()` is not available in Firefox. The label-based
