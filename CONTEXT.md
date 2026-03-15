@@ -17,10 +17,17 @@ monochromacy simulation.
 
 The conversion pipeline:
 
-1. Linearize sRGB values using the standard sRGB transfer function (lookup table
-   built at startup).
+1. Linearize sRGB values using the standard sRGB transfer function.
 2. Compute scotopic luminance: `0.007 * linR + 0.519 * linG + 0.474 * linB`.
 3. Re-apply sRGB gamma for display.
+
+All pixel processing runs in a WebGL fragment shader (GPU-accelerated). The video
+feed is uploaded as a texture each frame via `gl.texImage2D`. On iOS Safari, where
+direct video-to-texture upload may fail (WebKit bugs #133511, #223294, #230617),
+the code auto-detects the failure and falls back to drawing the video to an
+offscreen 2D canvas first, then uploading that canvas as the texture. This avoids
+the expensive `getImageData`/`putImageData` roundtrip that the pre-WebGL version
+used.
 
 A Rec. 601 mode (`0.299 R + 0.587 G + 0.114 B` on gamma-encoded values) is
 available for comparison — this is the standard "B&W filter" that camera apps
@@ -105,5 +112,3 @@ setting `srcObject` ensure playback starts across all browsers.
   Cycling cameras via the C button works around this.
 - `InputDeviceInfo.getCapabilities()` is not available in Firefox. The label-based
   fallback handles this.
-- The canvas is capped at 640px width (`MAX_PROCESS_WIDTH`) for per-frame pixel
-  processing performance.

@@ -141,6 +141,60 @@
     </div>
   </div>
   <script>
+    const VERT_SRC = `
+attribute vec2 aPos;
+varying vec2 vTexCoord;
+void main() {
+    vTexCoord = aPos * 0.5 + 0.5;
+    gl_Position = vec4(aPos, 0.0, 1.0);
+}`;
+
+    const FRAG_SRC = `
+precision mediump float;
+uniform sampler2D uVideo;
+uniform bool uGrayscale;
+uniform int uGrayMode;
+uniform bool uSigmoid;
+uniform float uSigmoidMid;
+varying vec2 vTexCoord;
+
+vec3 srgbToLinear(vec3 c) {
+    vec3 lo = c / 12.92;
+    vec3 hi = pow((c + 0.055) / 1.055, vec3(2.4));
+    return mix(lo, hi, step(0.04045, c));
+}
+
+float linearToSrgb(float c) {
+    float lo = 12.92 * c;
+    float hi = 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+    return mix(lo, hi, step(0.0031308, c));
+}
+
+void main() {
+    vec2 uv = vec2(vTexCoord.x, 1.0 - vTexCoord.y);
+    vec4 color = texture2D(uVideo, uv);
+    float lum = 0.0;
+
+    if (uGrayscale) {
+        if (uGrayMode == 0) {
+            vec3 lin = srgbToLinear(color.rgb);
+            float linLum = dot(lin, vec3(0.007, 0.519, 0.474));
+            lum = linearToSrgb(linLum);
+        } else {
+            lum = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+        }
+        color = vec4(vec3(lum), 1.0);
+    }
+
+    if (uSigmoid) {
+        float t = uGrayscale ? lum : dot(color.rgb, vec3(0.333333));
+        float blend = 1.0 / (1.0 + exp(-12.0 * (t - uSigmoidMid)));
+        color.rgb = color.rgb + blend * (1.0 - color.rgb);
+    }
+
+    gl_FragColor = color;
+}`;
+
     const sim = {
       video: document.getElementById('video'),
       canvas: document.getElementById('canvas'),
@@ -165,12 +219,17 @@
       stream: null,
       track: null,
       rafId: null,
-      ctx: null,
+      gl: null,
+      glProgram: null,
+      glUniforms: null,
+      glTexture: null,
+      texSourceCanvas: null,
+      texSourceCtx: null,
+      useCanvasWorkaround: false,
       caps: null,
       supportsET: false,
       grayscaleOn: true,
       grayMode: 'scotopic',
-      srgbToLinear: null,
       etOn: false,
       sigmoidOn: false,
       manualET: null,
@@ -179,13 +238,100 @@
       blurVA: 0.10,
       cameras: [],
       cameraIndex: -1,
-      MAX_PROCESS_WIDTH: 640,
+
+      initGL() {
+        const gl = this.canvas.getContext('webgl', { antialias: false, depth: false, stencil: false });
+        if (!gl) return false;
+        this.gl = gl;
+
+        const vs = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(vs, VERT_SRC);
+        gl.compileShader(vs);
+        if (!gl.getShaderParameter(vs, gl.COMPILE_STATUS)) {
+          console.error('Vertex shader:', gl.getShaderInfoLog(vs));
+          return false;
+        }
+
+        const fs = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(fs, FRAG_SRC);
+        gl.compileShader(fs);
+        if (!gl.getShaderParameter(fs, gl.COMPILE_STATUS)) {
+          console.error('Fragment shader:', gl.getShaderInfoLog(fs));
+          return false;
+        }
+
+        const prog = gl.createProgram();
+        gl.attachShader(prog, vs);
+        gl.attachShader(prog, fs);
+        gl.linkProgram(prog);
+        if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+          console.error('Program link:', gl.getProgramInfoLog(prog));
+          return false;
+        }
+        this.glProgram = prog;
+        gl.useProgram(prog);
+
+        this.glUniforms = {
+          uVideo: gl.getUniformLocation(prog, 'uVideo'),
+          uGrayscale: gl.getUniformLocation(prog, 'uGrayscale'),
+          uGrayMode: gl.getUniformLocation(prog, 'uGrayMode'),
+          uSigmoid: gl.getUniformLocation(prog, 'uSigmoid'),
+          uSigmoidMid: gl.getUniformLocation(prog, 'uSigmoidMid'),
+        };
+
+        const quad = new Float32Array([-1,-1, 1,-1, -1,1, 1,1]);
+        const buf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
+        const aPos = gl.getAttribLocation(prog, 'aPos');
+        gl.enableVertexAttribArray(aPos);
+        gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+        const tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        this.glTexture = tex;
+
+        gl.uniform1i(this.glUniforms.uVideo, 0);
+
+        this.canvas.addEventListener('webglcontextlost', (e) => {
+          e.preventDefault();
+          if (this.rafId) cancelAnimationFrame(this.rafId);
+        });
+        this.canvas.addEventListener('webglcontextrestored', () => {
+          this.initGL();
+          this.processFrame();
+        });
+
+        return true;
+      },
+
+      detectTexImageVideoSupport() {
+        const gl = this.gl;
+        try {
+          gl.bindTexture(gl.TEXTURE_2D, this.glTexture);
+          while (gl.getError() !== gl.NO_ERROR) { /* drain stale errors */ }
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.video);
+          if (gl.getError() !== gl.NO_ERROR) {
+            this.useCanvasWorkaround = true;
+          }
+        } catch (e) {
+          this.useCanvasWorkaround = true;
+        }
+        if (this.useCanvasWorkaround) {
+          console.log('Using canvas intermediary for video texture upload');
+          this.texSourceCanvas = document.createElement('canvas');
+          this.texSourceCtx = this.texSourceCanvas.getContext('2d');
+        }
+      },
 
       async start() {
-        this.srgbToLinear = new Float32Array(256);
-        for (let i = 0; i < 256; i++) {
-          const s = i / 255;
-          this.srgbToLinear[i] = s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+        if (!this.initGL()) {
+          this.showError('WebGL not supported. Try Chrome or Safari.');
+          return;
         }
 
         if (!navigator.mediaDevices?.getUserMedia) {
@@ -201,6 +347,7 @@
           this.video.onloadedmetadata = async () => {
             this.updateCanvasSize();
             this.updateBlurCSS();
+            this.detectTexImageVideoSupport();
             this.detectCapabilities();
             await this.enumerateCameras();
             this.updateInfo();
@@ -409,60 +556,44 @@
         const vw = this.video.videoWidth;
         const vh = this.video.videoHeight;
         if (!vw || !vh) return;
-        const scale = Math.min(1, this.MAX_PROCESS_WIDTH / vw);
-        this.canvas.width = Math.round(vw * scale);
-        this.canvas.height = Math.round(vh * scale);
-        this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
+        this.canvas.width = vw;
+        this.canvas.height = vh;
+        if (this.gl) this.gl.viewport(0, 0, vw, vh);
+        if (this.useCanvasWorkaround && this.texSourceCanvas) {
+          this.texSourceCanvas.width = vw;
+          this.texSourceCanvas.height = vh;
+        }
+      },
+
+      uploadVideoTexture() {
+        const gl = this.gl;
+        gl.bindTexture(gl.TEXTURE_2D, this.glTexture);
+        if (this.useCanvasWorkaround) {
+          const w = this.video.videoWidth;
+          const h = this.video.videoHeight;
+          this.texSourceCtx.drawImage(this.video, 0, 0, w, h);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.texSourceCanvas);
+        } else {
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.video);
+        }
       },
 
       processFrame() {
-        const ctx = this.ctx;
-        if (!ctx) { this.rafId = requestAnimationFrame(() => this.processFrame()); return; }
-        const w = this.canvas.width;
-        const h = this.canvas.height;
-
-        ctx.drawImage(this.video, 0, 0, w, h);
-
-        const doGray = this.grayscaleOn;
-        const doSigmoid = this.sigmoidOn;
-        if (doGray || doSigmoid) {
-          const imgData = ctx.getImageData(0, 0, w, h);
-          const data = imgData.data;
-          const len = data.length;
-          const mid = this.sigmoidMidpoint;
-          const mode = this.grayMode;
-          const s2l = this.srgbToLinear;
-
-          for (let i = 0; i < len; i += 4) {
-            let lum;
-            if (!doGray) {
-              lum = (data[i] + data[i + 1] + data[i + 2]) / 3;
-            } else if (mode === 'rec601') {
-              lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-            } else {
-              const linLum = 0.007 * s2l[data[i]] + 0.519 * s2l[data[i + 1]] + 0.474 * s2l[data[i + 2]];
-              lum = 255 * (linLum <= 0.0031308 ? 12.92 * linLum : 1.055 * Math.pow(linLum, 1 / 2.4) - 0.055);
-            }
-
-            if (doSigmoid) {
-              const t = lum / 255;
-              const blend = 1 / (1 + Math.exp(-12 * (t - mid)));
-              lum = lum + blend * (255 - lum);
-            }
-
-            if (doGray) {
-              data[i] = data[i + 1] = data[i + 2] = lum;
-            } else if (doSigmoid) {
-              const avg = (data[i] + data[i + 1] + data[i + 2]) / 3 || 1;
-              const s = lum / avg;
-              data[i] = Math.min(255, data[i] * s);
-              data[i + 1] = Math.min(255, data[i + 1] * s);
-              data[i + 2] = Math.min(255, data[i + 2] * s);
-            }
-          }
-
-          ctx.putImageData(imgData, 0, 0);
+        const gl = this.gl;
+        if (!gl || gl.isContextLost()) {
+          this.rafId = requestAnimationFrame(() => this.processFrame());
+          return;
         }
+
+        this.uploadVideoTexture();
+
+        const u = this.glUniforms;
+        gl.uniform1i(u.uGrayscale, this.grayscaleOn ? 1 : 0);
+        gl.uniform1i(u.uGrayMode, this.grayMode === 'scotopic' ? 0 : 1);
+        gl.uniform1i(u.uSigmoid, this.sigmoidOn ? 1 : 0);
+        gl.uniform1f(u.uSigmoidMid, this.sigmoidMidpoint);
+
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
         this.rafId = requestAnimationFrame(() => this.processFrame());
       },
