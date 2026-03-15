@@ -340,7 +340,7 @@ void main() {
         }
         try {
           this.stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment' }
+            video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
           });
           this.track = this.stream.getVideoTracks()[0];
           this.video.srcObject = this.stream;
@@ -417,7 +417,7 @@ void main() {
           await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
           try {
             this.stream = await navigator.mediaDevices.getUserMedia({
-              video: { deviceId: { exact: deviceId } }
+              video: { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
             });
             this.track = this.stream.getVideoTracks()[0];
             this.video.srcObject = this.stream;
@@ -547,6 +547,9 @@ void main() {
         if (this.blurOn) parts.push('VA ' + this.blurVA.toFixed(2));
         if (this.etOn && this.manualET != null) parts.push('ET ' + this.manualET + '\xB5s');
         if (this.sigmoidOn) parts.push('glare (' + this.sigmoidMidpoint.toFixed(2) + ')');
+        const vw = this.video.videoWidth;
+        const vh = this.video.videoHeight;
+        if (vw && vh) parts.push(vw + '\u00D7' + vh);
         const cam = this.getCameraLabel();
         if (cam) parts.push(cam);
         this.showInfo(parts.length ? parts.join(' | ') : 'no effects');
