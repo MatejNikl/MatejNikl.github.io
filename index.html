@@ -110,11 +110,11 @@
   <div id="error" role="alert"></div>
   <div id="info"></div>
   <div class="controls">
+    <div id="btn-cam" class="tbtn hidden" title="Switch camera">C</div>
     <div id="btn-gray" class="tbtn on" title="Grayscale">G</div>
     <div id="btn-blur" class="tbtn on" title="Acuity blur">B</div>
     <div id="btn-et" class="tbtn hidden" title="Exposure">E</div>
     <div id="btn-sig" class="tbtn" title="Glare">L</div>
-    <div id="btn-cam" class="tbtn hidden" title="Switch camera">C</div>
   </div>
   <div id="sliders">
     <div id="gray-row" class="slider-row" style="display:flex">
@@ -242,21 +242,28 @@
         if (this.cameras.length < 2) return;
         this.cameraIndex = (this.cameraIndex + 1) % this.cameras.length;
         const deviceId = this.cameras[this.cameraIndex].deviceId;
-        if (this.stream) this.stream.getTracks().forEach(t => t.stop());
-        try {
-          this.stream = await navigator.mediaDevices.getUserMedia({
-            video: { deviceId: { exact: deviceId } }
-          });
-          this.track = this.stream.getVideoTracks()[0];
-          this.video.srcObject = this.stream;
-          this.video.onloadedmetadata = () => {
-            this.updateCanvasSize();
-            this.updateBlurCSS();
-            this.detectCapabilities();
-            this.updateInfo();
-          };
-        } catch (err) {
-          this.showError('Camera switch failed: ' + err.message);
+        if (this.stream) {
+          this.stream.getTracks().forEach(t => t.stop());
+          this.video.srcObject = null;
+        }
+        for (let attempt = 0; attempt < 3; attempt++) {
+          await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+          try {
+            this.stream = await navigator.mediaDevices.getUserMedia({
+              video: { deviceId: { exact: deviceId } }
+            });
+            this.track = this.stream.getVideoTracks()[0];
+            this.video.srcObject = this.stream;
+            this.video.onloadedmetadata = () => {
+              this.updateCanvasSize();
+              this.updateBlurCSS();
+              this.detectCapabilities();
+              this.updateInfo();
+            };
+            return;
+          } catch (err) {
+            if (attempt === 2) this.showError('Camera switch failed: ' + err.message);
+          }
         }
       },
 
