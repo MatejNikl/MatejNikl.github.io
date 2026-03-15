@@ -126,7 +126,7 @@
     </div>
     <div id="blur-row" class="slider-row" style="display:flex">
       <label>VA</label>
-      <input type="range" id="blur-slider" min="5" max="50" value="10" step="5">
+      <input type="range" id="blur-slider" min="50" max="300" value="100" step="25">
       <label id="blur-val" class="val">0.10</label>
     </div>
     <div id="et-row" class="slider-row">
@@ -596,7 +596,7 @@ void main() {
       },
 
       onBlurChange() {
-        this.blurVA = parseInt(this.blurSlider.value) / 100;
+        this.blurVA = parseInt(this.blurSlider.value) / 1000;
         this.blurVal.textContent = this.blurVA.toFixed(2);
         this.updateBlurCSS();
         this.updateInfo();
@@ -629,9 +629,6 @@ void main() {
           parts.push(etInfo);
         }
         if (this.sigmoidOn) parts.push('glare (' + this.sigmoidMidpoint.toFixed(2) + ')');
-        const vw = this.video.videoWidth;
-        const vh = this.video.videoHeight;
-        if (vw && vh) parts.push(vw + '\u00D7' + vh);
         const cam = this.getCameraLabel();
         if (cam) parts.push(cam);
         this.showInfo(parts.length ? parts.join(' | ') : 'no effects');
