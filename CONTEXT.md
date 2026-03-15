@@ -204,6 +204,14 @@ setting `srcObject` ensure playback starts across all browsers.
   overwhelmed). Lower ISO (e.g., 200) raises the ET floor (less easily
   overwhelmed).
 
+  The ISO slider has a computed lower bound (`isoFloor`) that prevents the ET
+  floor from exceeding the hardware ET maximum. Setting `ET_floor = ET_hw_max`
+  and solving: `ISO_min = N² × C_emp × 1e6 / (1000 × ET_hw_max)`. For f/1.8
+  with ET_hw_max = 1000 µs this gives ISO 100. Without this bound, low ISO
+  values produce an ET floor above the hardware maximum, which inverts the
+  logarithmic slider mapping. The ET value is also clamped to hardware bounds
+  as a safety net.
+
 ## Known issues
 
 - iOS Safari (not Chrome) may still show a frozen first frame on initial load.

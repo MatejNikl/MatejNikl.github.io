@@ -238,6 +238,7 @@ void main() {
       supportsET: false,
       supportsISO: false,
       aperture: 1.8,
+      isoFloor: 100,
       grayscaleOn: true,
       grayMode: 'scotopic',
       etOn: false,
@@ -387,7 +388,12 @@ void main() {
         this.aperture = 1.8;
         console.log('Aperture (assumed):', this.aperture);
 
-        if (this.supportsISO) {
+        if (this.supportsISO && this.supportsET) {
+          const N = this.aperture;
+          const etMax = this.caps.exposureTime.max;
+          this.isoFloor = Math.max(this.caps.iso.min,
+            Math.ceil(N * N * 30.86 * 1e6 / (1000 * etMax)));
+          console.log('ISO floor:', this.isoFloor);
           this.setISOSliderTo(400);
         }
       },
@@ -464,8 +470,9 @@ void main() {
       getISOFromSlider() {
         if (!this.supportsISO) return 400;
         const val = parseInt(this.isoSlider.value);
-        const { min, max } = this.caps.iso;
-        const logMin = Math.log(min);
+        const effectiveMin = Math.max(this.caps.iso.min, this.isoFloor);
+        const max = this.caps.iso.max;
+        const logMin = Math.log(effectiveMin);
         const logMax = Math.log(max);
         const t = (val - 1) / 99;
         return Math.round(Math.exp(logMin + t * (logMax - logMin)));
@@ -473,9 +480,10 @@ void main() {
 
       setISOSliderTo(target) {
         if (!this.supportsISO) return;
-        const { min, max } = this.caps.iso;
-        const clamped = Math.max(min, Math.min(target, max));
-        const logMin = Math.log(min);
+        const effectiveMin = Math.max(this.caps.iso.min, this.isoFloor);
+        const max = this.caps.iso.max;
+        const clamped = Math.max(effectiveMin, Math.min(target, max));
+        const logMin = Math.log(effectiveMin);
         const logMax = Math.log(max);
         const t = (Math.log(clamped) - logMin) / (logMax - logMin);
         this.isoSlider.value = Math.round(1 + t * 99);
@@ -485,7 +493,7 @@ void main() {
       setETSliderTo(target) {
         const { min, max } = this.caps.exposureTime;
         const etFloor = this.getETFloor();
-        const effectiveMin = Math.max(min, etFloor);
+        const effectiveMin = Math.min(Math.max(min, etFloor), max);
         const clamped = Math.max(effectiveMin, Math.min(target, max));
         const logMin = Math.log(effectiveMin);
         const logMax = Math.log(max);
@@ -497,11 +505,12 @@ void main() {
         const val = parseInt(this.etSlider.value);
         const { min, max } = this.caps.exposureTime;
         const etFloor = this.getETFloor();
-        const effectiveMin = Math.max(min, etFloor);
+        const effectiveMin = Math.min(Math.max(min, etFloor), max);
         const logMin = Math.log(effectiveMin);
         const logMax = Math.log(max);
         const t = (val - 1) / 99;
-        return Math.round(Math.exp(logMin + t * (logMax - logMin)));
+        return Math.max(min, Math.min(max,
+          Math.round(Math.exp(logMin + t * (logMax - logMin)))));
       },
 
       async onISOChange() {
