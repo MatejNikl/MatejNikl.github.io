@@ -3,6 +3,62 @@
 A single-file web app (`index.html`) that uses the phone's back camera to show
 approximately what a person with complete achromatopsia (rod monochromacy) sees.
 
+## Original motivation
+
+The simulator was built by a parent whose young son has achromatopsia. The child
+is too young to describe how he sees, so the goal is to approximate his visual
+experience for family, teachers, and therapists.
+
+The initial idea was straightforward: grayscale plus photophobia simulation. For
+photophobia, the hypothesis was that the camera's auto-exposure could be exploited
+— in bright conditions the camera shortens its shutter speed and lowers ISO to
+compensate, but rods cannot adapt like that. If the camera were prevented from
+lowering its exposure settings below a certain range, bright scenes would
+naturally blow out to white, mimicking rod saturation.
+
+## Photophobia via camera exposure — what was tried and why it failed
+
+### Attempt 1: Fixed manual exposure
+
+The first approach locked `exposureTime` and `iso` to high fixed values via
+`MediaStreamTrack.applyConstraints({ exposureMode: 'manual', exposureTime: ...,
+iso: ... })`. This made everything too bright — even a dimly lit living room
+washed out, because real rods *do* adapt within a limited range. A fully fixed
+exposure is like a retina that is permanently saturated.
+
+### Attempt 2: Clamped auto-exposure
+
+The next idea was to let the camera auto-adjust within a *restricted* range —
+auto-exposure with a floor on ET, so it can't shorten the shutter below a
+threshold. Two strategies were tried:
+
+- **Strategy A (range-constrained continuous)**: Set `exposureMode: 'continuous'`
+  with `min`/`max` range constraints on ET via `applyConstraints`. The constraint
+  was accepted without error on Samsung S22, but the camera silently ignored it.
+- **Strategy B (software polling loop)**: Read `track.getSettings()` every 500ms,
+  and if the auto-exposure chose an ET below the floor, switch to manual mode and
+  clamp it. This failed because `getSettings()` on the S22 (and likely most
+  Android Chrome) always returns a static dummy value (`exposureTime: 300`,
+  `iso: 0`), regardless of actual lighting conditions. The camera does not expose
+  real-time exposure feedback through the web API.
+
+### Outcome
+
+Both strategies depend on reading the camera's *current* exposure parameters,
+which `getSettings()` does not reliably provide on Android. The clamped
+auto-exposure concept is physiologically sound but technically infeasible with
+current web APIs on most Android devices.
+
+What *does* work is `applyConstraints({ exposureMode: 'manual', exposureTime: X })`
+— setting an explicit manual ET value. This is what the current E button does: a
+direct manual ET slider. It cannot emulate the gradual rod saturation curve, but
+it lets the user force the camera to over-expose, which is useful for
+demonstrating what happens in bright light.
+
+The sigmoid wash-out (L button) was added as a software fallback for photophobia
+simulation — it is device-independent and always works, though it operates on
+pixel brightness rather than actual scene illuminance.
+
 ## Scotopic grayscale conversion
 
 Rod monochromats have no functioning cone cells and rely entirely on rods. Rods
