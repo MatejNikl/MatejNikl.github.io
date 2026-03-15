@@ -26,9 +26,10 @@
       top: 10px;
       right: 10px;
       display: flex;
+      flex-direction: column;
+      align-items: flex-end;
       gap: 8px;
       z-index: 10;
-      align-items: flex-start;
     }
     .pill {
       padding: 7px 14px;
@@ -147,10 +148,10 @@
   <canvas id="canvas"></canvas>
   <div id="error" role="alert"></div>
   <div class="controls">
+    <div id="btn-settings" class="pill pill-gear" title="Settings">&#x2699;</div>
     <div id="btn-gray" class="pill on">Rod vision</div>
     <div id="btn-blur" class="pill on">Blur</div>
     <div id="btn-et" class="pill hidden">Exposure</div>
-    <div id="btn-settings" class="pill pill-gear" title="Settings">&#x2699;</div>
   </div>
   <div id="settings-panel">
     <div class="settings-row">
@@ -469,12 +470,12 @@ void main() {
         this.cameraIndex = this.cameras.findIndex(c => c.deviceId === currentId);
         if (this.cameraIndex === -1) this.cameraIndex = 0;
 
+        if (this.cameraIndex !== 0) await this.switchCamera(0);
+
         if (this.cameras.length > 1) {
           this.camRow.style.display = 'flex';
           this.populateCameraSelect();
         }
-
-        if (this.cameraIndex !== 0) await this.switchCamera(0);
       },
 
       populateCameraSelect() {
@@ -513,6 +514,7 @@ void main() {
               this.detectCapabilities();
             };
             await this.video.play();
+            this.camSelect.value = this.cameraIndex;
             return;
           } catch (err) {
             if (attempt === 2) this.showError('Camera switch failed: ' + err.message);
