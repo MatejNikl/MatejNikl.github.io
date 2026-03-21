@@ -63,7 +63,7 @@
       flex-direction: column;
       gap: 10px;
       z-index: 20;
-      min-width: 220px;
+      min-width: 240px;
     }
     .settings-row {
       display: flex;
@@ -74,7 +74,7 @@
       color: #ccc;
       font-size: 12px;
       white-space: nowrap;
-      min-width: 92px;
+      min-width: 118px;
     }
     .settings-row .val {
       min-width: 36px;
@@ -154,34 +154,42 @@
   </div>
   <div id="settings-panel">
     <div class="settings-row">
-      <label>Glare</label>
+      <label id="label-glare">Glare</label>
       <div id="btn-sig" class="setting-pill">off</div>
     </div>
     <div id="sig-row" class="settings-row" style="display:none">
-      <label>Strength</label>
+      <label id="label-strength">Strength</label>
       <input type="range" id="sig-slider" min="30" max="80" value="60">
       <span id="sig-val" class="val">0.50</span>
     </div>
     <div class="settings-row">
-      <label>Grayscale type</label>
+      <label id="label-gray-type">Grayscale type</label>
       <select id="gray-mode">
         <option value="scotopic" selected>Science-based</option>
         <option value="rec601">Plain B&amp;W</option>
       </select>
     </div>
+    <div class="settings-row">
+      <label id="label-language">Language</label>
+      <select id="lang-select">
+        <option value="auto" selected>System default</option>
+        <option value="en">English</option>
+        <option value="cs">Czech</option>
+      </select>
+    </div>
     <div id="cam-row" class="settings-row" style="display:none">
-      <label>Camera</label>
+      <label id="label-camera">Camera</label>
       <select id="cam-select"></select>
     </div>
   </div>
   <div id="sliders">
     <div id="blur-row" class="slider-row" style="display:flex">
-      <label>Sharpness</label>
+      <label id="label-sharpness">Sharpness</label>
       <input type="range" id="blur-slider" min="50" max="300" value="100" step="25">
       <label id="blur-val" class="val">0.100</label>
     </div>
     <div id="et-row" class="slider-row">
-      <label>Shutter</label>
+      <label id="label-shutter">Shutter</label>
       <input type="range" id="et-slider" min="1" max="100" value="50">
       <label id="et-val" class="val">--</label>
     </div>
@@ -241,6 +249,125 @@ void main() {
     gl_FragColor = color;
 }`;
 
+    const I18N = {
+      en: {
+        title: 'Achromatopsia Simulator',
+        grayscale: 'Grayscale',
+        grayscaleTitle: 'Turn off to see the camera in full color',
+        blur: 'Blur',
+        brightLight: 'Bright light',
+        brightLightTitle: 'Manual shutter and ISO — simulates very bright light',
+        settingsTitle: 'Settings',
+        glare: 'Glare',
+        glareOff: 'off',
+        glareOn: 'on',
+        strength: 'Strength',
+        grayType: 'Grayscale type',
+        grayScience: 'Science-based',
+        grayPlain: 'Plain B&W',
+        camera: 'Camera',
+        sharpness: 'Sharpness',
+        shutter: 'Shutter',
+        errWebGL: 'WebGL not supported. Try Chrome or Safari.',
+        errCameraUnsupported: 'Camera access not supported. Try Chrome or Safari.',
+        errCameraFailed: 'Camera failed: {0}',
+        errSwitchFailed: 'Camera switch failed: {0}',
+        langLabel: 'Language',
+        langAuto: 'System default',
+        langEn: 'English',
+        langCs: 'Czech',
+      },
+      cs: {
+        title: 'Simulátor achromatopsie',
+        grayscale: 'Stupně šedi',
+        grayscaleTitle: 'Vypněte pro barevný obraz z kamery',
+        blur: 'Rozmazání',
+        brightLight: 'Jasné světlo',
+        brightLightTitle: 'Ruční závěrka a ISO — simuluje velmi jasné světlo',
+        settingsTitle: 'Nastavení',
+        glare: 'Oslnění',
+        glareOff: 'vypnuto',
+        glareOn: 'zapnuto',
+        strength: 'Síla',
+        grayType: 'Typ stupňů šedi',
+        grayScience: 'Vědecky podložené',
+        grayPlain: 'Obyčejná černobílá',
+        camera: 'Kamera',
+        sharpness: 'Ostrost',
+        shutter: 'Závěrka',
+        errWebGL: 'WebGL není podporován. Zkuste Chrome nebo Safari.',
+        errCameraUnsupported: 'Přístup ke kameře není podporován. Zkuste Chrome nebo Safari.',
+        errCameraFailed: 'Kamera selhala: {0}',
+        errSwitchFailed: 'Přepnutí kamery selhalo: {0}',
+        langLabel: 'Jazyk',
+        langAuto: 'Podle systému',
+        langEn: 'Angličtina',
+        langCs: 'Čeština',
+      },
+    };
+
+    const LOCALE_STORAGE_KEY = 'achromatopsia-simulator-locale';
+
+    function pickLocale() {
+      const list = (navigator.languages && navigator.languages.length)
+        ? [...navigator.languages]
+        : [navigator.language || 'en'];
+      for (const tag of list) {
+        const base = String(tag).split('-')[0].toLowerCase();
+        if (base === 'cs') return 'cs';
+      }
+      return 'en';
+    }
+
+    function readLocaleOverride() {
+      try {
+        const v = localStorage.getItem(LOCALE_STORAGE_KEY);
+        if (v === 'en' || v === 'cs') return v;
+      } catch (e) { /* private mode, disabled storage */ }
+      return null;
+    }
+
+    function getEffectiveLocale() {
+      const override = readLocaleOverride();
+      if (override) return override;
+      return pickLocale();
+    }
+
+    function applyLocaleToSim(sim) {
+      const effective = getEffectiveLocale();
+      sim.locale = effective;
+      sim.strings = I18N[effective] || I18N.en;
+      const t = sim.strings;
+      document.documentElement.lang = effective === 'cs' ? 'cs' : 'en';
+      document.title = t.title;
+      sim.btnGray.textContent = t.grayscale;
+      sim.btnGray.title = t.grayscaleTitle;
+      sim.btnBlur.textContent = t.blur;
+      sim.btnET.textContent = t.brightLight;
+      sim.btnET.title = t.brightLightTitle;
+      sim.btnSettings.title = t.settingsTitle;
+      document.getElementById('label-glare').textContent = t.glare;
+      document.getElementById('label-strength').textContent = t.strength;
+      document.getElementById('label-gray-type').textContent = t.grayType;
+      document.getElementById('label-language').textContent = t.langLabel;
+      document.getElementById('label-camera').textContent = t.camera;
+      document.getElementById('label-sharpness').textContent = t.sharpness;
+      document.getElementById('label-shutter').textContent = t.shutter;
+      const optS = sim.grayModeSelect.querySelector('option[value="scotopic"]');
+      const optR = sim.grayModeSelect.querySelector('option[value="rec601"]');
+      if (optS) optS.textContent = t.grayScience;
+      if (optR) optR.textContent = t.grayPlain;
+      const lo = sim.langSelect.options;
+      lo[0].textContent = t.langAuto;
+      lo[1].textContent = t.langEn;
+      lo[2].textContent = t.langCs;
+      sim.langSelect.value = readLocaleOverride() || 'auto';
+      sim.btnSig.textContent = sim.sigmoidOn ? t.glareOn : t.glareOff;
+      if (sim.errorDiv.style.display === 'block' && sim._lastErrorKey) {
+        sim.showError(sim._lastErrorKey, ...(sim._lastErrorParams || []));
+      }
+    }
+
     const sim = {
       video: document.getElementById('video'),
       canvas: document.getElementById('canvas'),
@@ -263,6 +390,7 @@ void main() {
       blurVal: document.getElementById('blur-val'),
       camRow: document.getElementById('cam-row'),
       camSelect: document.getElementById('cam-select'),
+      langSelect: document.getElementById('lang-select'),
       stream: null,
       track: null,
       rafId: null,
@@ -289,6 +417,8 @@ void main() {
       settingsOpen: false,
       cameras: [],
       cameraIndex: -1,
+      locale: 'en',
+      strings: I18N.en,
 
       initGL() {
         const gl = this.canvas.getContext('webgl', { antialias: false, depth: false, stencil: false });
@@ -394,12 +524,12 @@ void main() {
 
       async start() {
         if (!this.initGL()) {
-          this.showError('WebGL not supported. Try Chrome or Safari.');
+          this.showError('errWebGL');
           return;
         }
 
         if (!navigator.mediaDevices?.getUserMedia) {
-          this.showError('Camera access not supported. Try Chrome or Safari.');
+          this.showError('errCameraUnsupported');
           return;
         }
         try {
@@ -410,7 +540,7 @@ void main() {
           await this.enumerateCameras();
           this.processFrame();
         } catch (err) {
-          this.showError(`Camera failed: ${err.message}`);
+          this.showError('errCameraFailed', err.message);
         }
       },
 
@@ -550,7 +680,7 @@ void main() {
             this.camSelect.value = this.cameraIndex;
             return;
           } catch (err) {
-            if (attempt === 2) this.showError('Camera switch failed: ' + err.message);
+            if (attempt === 2) this.showError('errSwitchFailed', err.message);
           }
         }
       },
@@ -634,10 +764,23 @@ void main() {
         this.grayMode = this.grayModeSelect.value;
       },
 
+      onLanguageChange() {
+        const v = this.langSelect.value;
+        try {
+          if (v === 'auto') {
+            localStorage.removeItem(LOCALE_STORAGE_KEY);
+          } else {
+            localStorage.setItem(LOCALE_STORAGE_KEY, v);
+          }
+        } catch (e) { /* private mode */ }
+        applyLocaleToSim(this);
+      },
+
       toggleSigmoid() {
         this.sigmoidOn = !this.sigmoidOn;
         this.btnSig.classList.toggle('on', this.sigmoidOn);
-        this.btnSig.textContent = this.sigmoidOn ? 'on' : 'off';
+        const t = this.strings;
+        this.btnSig.textContent = this.sigmoidOn ? t.glareOn : t.glareOff;
         this.sigRow.style.display = this.sigmoidOn ? 'flex' : 'none';
       },
 
@@ -731,10 +874,18 @@ void main() {
         this.rafId = requestAnimationFrame(() => this.processFrame());
       },
 
-      showError(msg) {
-        this.errorDiv.textContent = msg;
+      showError(msgKey, ...params) {
+        const t = this.strings || I18N.en;
+        const known = Object.prototype.hasOwnProperty.call(t, msgKey);
+        let fmt = known ? t[msgKey] : msgKey;
+        for (let i = 0; i < params.length; i++) {
+          fmt = fmt.split('{' + i + '}').join(String(params[i]));
+        }
+        this._lastErrorKey = known ? msgKey : null;
+        this._lastErrorParams = params;
+        this.errorDiv.textContent = fmt;
         this.errorDiv.style.display = 'block';
-        console.error(msg);
+        console.error(fmt);
       },
 
       cleanup() {
@@ -742,6 +893,8 @@ void main() {
         if (this.stream) this.stream.getTracks().forEach(t => t.stop());
       }
     };
+
+    applyLocaleToSim(sim);
 
     document.getElementById('btn-gray').addEventListener('click', () => sim.toggleGrayscale());
     document.getElementById('btn-et').addEventListener('click', () => sim.toggleET());
@@ -753,6 +906,7 @@ void main() {
     document.getElementById('sig-slider').addEventListener('input', () => sim.onSigmoidThresholdChange());
     document.getElementById('blur-slider').addEventListener('input', () => sim.onBlurChange());
     document.getElementById('gray-mode').addEventListener('change', () => sim.onGrayModeChange());
+    document.getElementById('lang-select').addEventListener('change', () => sim.onLanguageChange());
 
     let resizeTimeout;
     window.addEventListener('resize', () => {

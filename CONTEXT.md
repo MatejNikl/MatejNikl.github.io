@@ -5,6 +5,14 @@ approximately what a person with complete achromatopsia (rod monochromacy) sees.
 
 ## User interface
 
+**Language:** Under **Settings → Language**, the user can choose **System default**
+(follow the browser’s preferred languages), **English**, or **Czech**. **System
+default** uses the same rule as before: if `navigator.languages` / `navigator.language`
+includes any tag whose primary subtag is `cs`, the UI is Czech; otherwise English.
+A choice of English or Czech is stored in `localStorage` under the key
+`achromatopsia-simulator-locale` so it persists across visits; **System default**
+clears that override.
+
 Controls are anchored top-right unless noted.
 
 - **Grayscale**: Toggles the scotopic grayscale shader on or off (full color when off).
@@ -21,6 +29,8 @@ Controls are anchored top-right unless noted.
     slider adjusts the sigmoid midpoint.
   - **Grayscale type**: Dropdown — **Science-based** (scotopic / rod-weighted
     luminance in the shader) vs **Plain B&W** (Rec. 601) when grayscale is on.
+  - **Language**: Dropdown — **System default**, **English**, or **Czech** (see
+    **Language** paragraph above).
   - **Camera**: Dropdown listing rear cameras, only when more than one was
     detected after enumeration.
 
