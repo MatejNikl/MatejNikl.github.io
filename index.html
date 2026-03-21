@@ -74,7 +74,7 @@
       color: #ccc;
       font-size: 12px;
       white-space: nowrap;
-      min-width: 52px;
+      min-width: 92px;
     }
     .settings-row .val {
       min-width: 36px;
@@ -130,7 +130,7 @@
       color: #ccc;
       font-size: 12px;
       white-space: nowrap;
-      min-width: 28px;
+      min-width: 64px;
     }
     .slider-row .val {
       min-width: 48px;
@@ -147,9 +147,9 @@
   <canvas id="canvas"></canvas>
   <div id="error" role="alert"></div>
   <div class="controls">
-    <div id="btn-gray" class="pill on">Rod vision</div>
+    <div id="btn-gray" class="pill on" title="Turn off to see the camera in full color">Grayscale</div>
     <div id="btn-blur" class="pill on">Blur</div>
-    <div id="btn-et" class="pill hidden">Exposure</div>
+    <div id="btn-et" class="pill hidden" title="Manual shutter and ISO — simulates very bright light">Bright light</div>
     <div id="btn-settings" class="pill pill-gear" title="Settings">&#x2699;</div>
   </div>
   <div id="settings-panel">
@@ -158,15 +158,15 @@
       <div id="btn-sig" class="setting-pill">off</div>
     </div>
     <div id="sig-row" class="settings-row" style="display:none">
-      <label>threshold</label>
+      <label>Strength</label>
       <input type="range" id="sig-slider" min="30" max="80" value="60">
       <span id="sig-val" class="val">0.50</span>
     </div>
     <div class="settings-row">
-      <label>Grayscale</label>
+      <label>Grayscale type</label>
       <select id="gray-mode">
-        <option value="scotopic" selected>scotopic (rod vision)</option>
-        <option value="rec601">rec. 601 (standard B&W)</option>
+        <option value="scotopic" selected>Science-based</option>
+        <option value="rec601">Plain B&amp;W</option>
       </select>
     </div>
     <div id="cam-row" class="settings-row" style="display:none">
@@ -176,12 +176,12 @@
   </div>
   <div id="sliders">
     <div id="blur-row" class="slider-row" style="display:flex">
-      <label>VA</label>
+      <label>Sharpness</label>
       <input type="range" id="blur-slider" min="50" max="300" value="100" step="25">
       <label id="blur-val" class="val">0.10</label>
     </div>
     <div id="et-row" class="slider-row">
-      <label>ET</label>
+      <label>Shutter</label>
       <input type="range" id="et-slider" min="1" max="100" value="50">
       <label id="et-val" class="val">--</label>
     </div>

@@ -7,19 +7,20 @@ approximately what a person with complete achromatopsia (rod monochromacy) sees.
 
 Controls are anchored top-right unless noted.
 
-- **Rod vision**: Toggles the scotopic grayscale shader on or off (full color when off).
-- **Blur**: Toggles the acuity simulation. When on, a **VA** slider appears at the
-  bottom (visual acuity as a decimal, e.g. 0.10 ≈ 20/200).
-- **Exposure**: Shown only when `getCapabilities()` reports `exposureMode`
+- **Grayscale**: Toggles the scotopic grayscale shader on or off (full color when off).
+- **Blur**: Toggles the acuity simulation. When on, a **Sharpness** slider appears at
+  the bottom (still driven by visual acuity internally, e.g. 0.10 ≈ 20/200 — higher
+  value means sharper / less blur).
+- **Bright light**: Shown only when `getCapabilities()` reports `exposureMode`
   including `manual` and an `exposureTime` range. Toggles manual exposure mode;
-  when on, a logarithmic **ET** (exposure time) slider appears at the bottom. If
+  when on, a logarithmic **Shutter** (exposure time) slider appears at the bottom. If
   the camera exposes `iso` in capabilities, **ISO is fixed at 400** (clamped to
   the hardware min/max) on every `applyConstraints` call — there is no ISO slider.
 - **Settings** (gear): Opens a panel below the gear with:
-  - **Glare**: Sigmoid photophobia simulation on/off; when on, a **threshold**
+  - **Glare**: Sigmoid photophobia simulation on/off; when on, a **Strength**
     slider adjusts the sigmoid midpoint.
-  - **Grayscale**: Dropdown to choose scotopic (rod vision) vs Rec. 601
-    (standard B&W) when rod vision is enabled in the shader path.
+  - **Grayscale type**: Dropdown — **Science-based** (scotopic / rod-weighted
+    luminance in the shader) vs **Plain B&W** (Rec. 601) when grayscale is on.
   - **Camera**: Dropdown listing rear cameras, only when more than one was
     detected after enumeration.
 
@@ -70,8 +71,8 @@ auto-exposure concept is physiologically sound but technically infeasible with
 current web APIs on most Android devices.
 
 What *does* work is `applyConstraints({ exposureMode: 'manual', exposureTime: X })`
-— setting an explicit manual ET value. The **Exposure** control does this via a
-direct manual ET slider. It cannot emulate the gradual rod saturation curve, but
+— setting an explicit manual ET value. The **Bright light** control does this via a
+direct manual shutter (ET) slider. It cannot emulate the gradual rod saturation curve, but
 it lets the user force the camera to over-expose, which is useful for
 demonstrating what happens in bright light.
 
@@ -106,7 +107,7 @@ the expensive `getImageData`/`putImageData` roundtrip that the pre-WebGL version
 used.
 
 A Rec. 601 mode (`0.299 R + 0.587 G + 0.114 B` on gamma-encoded values) is
-selectable under **Settings → Grayscale** for comparison — this is the standard
+selectable under **Settings → Grayscale type** as **Plain B&W** — this is the standard
 "B&W filter" that camera apps typically use. It represents photopic (cone-based)
 luminance and is *not* accurate for achromatopsia.
 
@@ -189,13 +190,13 @@ starts across all browsers.
 
 - **Glare** (Settings): Sigmoid wash-out simulating photophobia / light
   sensitivity. Applies `1/(1+exp(-12*(t-mid)))` blend toward white. Adjustable
-  midpoint via the threshold slider when Glare is on.
-- **Exposure** (top bar): Manual exposure time via `MediaStreamTrack.applyConstraints`,
+  midpoint via the **Strength** slider when Glare is on.
+- **Bright light** (top bar): Manual exposure time via `MediaStreamTrack.applyConstraints`,
   with **ISO held fixed at 400** when the camera supports setting `iso` (clamped
-  to `[iso.min, iso.max]` so odd hardware ranges still work). The **Exposure**
+  to `[iso.min, iso.max]` so odd hardware ranges still work). The **Bright light**
   pill is hidden until `getCapabilities()` reports `exposureMode` including
-  `manual` and a defined `exposureTime` range. When Exposure is toggled on, a
-  logarithmic **ET** slider appears at the bottom.
+  `manual` and a defined `exposureTime` range. When it is toggled on, a
+  logarithmic **Shutter** (ET) slider appears at the bottom.
 
   **Why fixed ISO 400:** It matches the empirical calibration on the Samsung S22
   (f/1.8) used to derive `C_emp ≈ 30.86`. It is a sensible mid-gain default for
@@ -206,7 +207,7 @@ starts across all browsers.
   browsers (often dummy values), so the app does not try to track or follow auto
   ISO in software.
 
-  The **ET** slider’s minimum is an **ET floor** derived so that, at the fixed
+  The **Shutter** slider’s minimum is an **ET floor** derived so that, at the fixed
   ISO above, lengthening exposure from that point loosely aligns with “wash-out
   territory” around **~1000 lux** — the illuminance at which rod saturation
   overwhelms an achromat’s vision in the model.
@@ -239,11 +240,11 @@ starts across all browsers.
 
 ## Known issues
 
-- **Manual exposure (Exposure pill) is effectively Android Chrome only.** The
+- **Manual exposure (Bright light pill) is effectively Android Chrome only.** The
   `exposureTime` and `iso` capabilities in `MediaStreamTrack.getCapabilities()`
   are part of the W3C mediacapture-image spec but only implemented in Chrome on
   Android (since Chrome 72). iOS Safari does not support them — all iOS browsers
-  use WebKit, which has no `exposureTime` or `iso` implementation. The Exposure
+  use WebKit, which has no `exposureTime` or `iso` implementation. The Bright light
   control stays hidden on iOS because capability detection does not find manual
   `exposureTime`. There is no web API workaround for manual shutter speed on iOS.
 - iOS Safari (not Chrome) may still show a frozen first frame on initial load.
