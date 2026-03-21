@@ -3,6 +3,26 @@
 A single-file web app (`index.html`) that uses the phone's back camera to show
 approximately what a person with complete achromatopsia (rod monochromacy) sees.
 
+## User interface
+
+Controls are anchored top-right unless noted.
+
+- **Rod vision**: Toggles the scotopic grayscale shader on or off (full color when off).
+- **Blur**: Toggles the acuity simulation. When on, a **VA** slider appears at the
+  bottom (visual acuity as a decimal, e.g. 0.10 ≈ 20/200).
+- **Exposure**: Shown only when `getCapabilities()` reports `exposureMode`
+  including `manual` and an `exposureTime` range. Toggles manual exposure mode;
+  when on, **ET** and **ISO**
+  logarithmic sliders appear at the bottom. The **ISO** row appears only if the
+  camera also exposes `iso` in capabilities.
+- **Settings** (gear): Opens a panel below the gear with:
+  - **Glare**: Sigmoid photophobia simulation on/off; when on, a **threshold**
+    slider adjusts the sigmoid midpoint.
+  - **Grayscale**: Dropdown to choose scotopic (rod vision) vs Rec. 601
+    (standard B&W) when rod vision is enabled in the shader path.
+  - **Camera**: Dropdown listing rear cameras, only when more than one was
+    detected after enumeration.
+
 ## Original motivation
 
 The simulator was built by a parent whose young son has achromatopsia. The child
@@ -50,14 +70,14 @@ auto-exposure concept is physiologically sound but technically infeasible with
 current web APIs on most Android devices.
 
 What *does* work is `applyConstraints({ exposureMode: 'manual', exposureTime: X })`
-— setting an explicit manual ET value. This is what the current E button does: a
+— setting an explicit manual ET value. The **Exposure** control does this via a
 direct manual ET slider. It cannot emulate the gradual rod saturation curve, but
 it lets the user force the camera to over-expose, which is useful for
 demonstrating what happens in bright light.
 
-The sigmoid wash-out (L button) was added as a software fallback for photophobia
-simulation — it is device-independent and always works, though it operates on
-pixel brightness rather than actual scene illuminance.
+The sigmoid wash-out (**Glare** in Settings) was added as a software fallback for
+photophobia simulation — it is device-independent and always works, though it
+operates on pixel brightness rather than actual scene illuminance.
 
 ## Scotopic grayscale conversion
 
@@ -86,9 +106,9 @@ the expensive `getImageData`/`putImageData` roundtrip that the pre-WebGL version
 used.
 
 A Rec. 601 mode (`0.299 R + 0.587 G + 0.114 B` on gamma-encoded values) is
-available for comparison — this is the standard "B&W filter" that camera apps
-typically use. It represents photopic (cone-based) luminance and is *not*
-accurate for achromatopsia.
+selectable under **Settings → Grayscale** for comparison — this is the standard
+"B&W filter" that camera apps typically use. It represents photopic (cone-based)
+luminance and is *not* accurate for achromatopsia.
 
 ### Why not the earlier coefficients?
 
@@ -125,7 +145,8 @@ to request 1080p from the camera. Using `ideal` (not `exact`) ensures the reques
 never fails — the browser negotiates the closest supported resolution. Without
 these constraints, most mobile browsers default to 640×480.
 
-The actual resolution is shown in the info overlay (e.g. `1080×1920`).
+The canvas is sized to `video.videoWidth` × `video.videoHeight` from the active
+stream; that size is not displayed on the page.
 
 ## Camera handling
 
@@ -146,7 +167,8 @@ The camera selection logic:
    camera 0 is the primary rear camera per camera2 API conventions.
 4. If the initially selected camera isn't the main one (index 0 after sorting),
    auto-switch to it.
-5. A cycle button (C) appears when multiple rear cameras are available.
+5. When multiple rear cameras are available, **Settings → Camera** shows a
+   dropdown to pick which rear device to use.
 
 ### Android camera switch race condition
 
@@ -158,18 +180,21 @@ increasing delays (300ms, 600ms, 900ms).
 ### iOS Safari frozen frame
 
 iOS Safari requires `muted` on the `<video>` element for autoplay to work with
-media streams. Without it, the video freezes on the first frame. Cycling cameras
-also unfreezes the stream as a side effect. Explicit `video.play()` calls after
-setting `srcObject` ensure playback starts across all browsers.
+media streams. Without it, the video freezes on the first frame. Switching to
+another camera via **Settings → Camera** can also unfreeze the stream as a side
+effect. Explicit `video.play()` calls after setting `srcObject` ensure playback
+starts across all browsers.
 
 ## Other effects
 
-- **Glare (L button)**: Sigmoid wash-out simulating photophobia / light
+- **Glare** (Settings): Sigmoid wash-out simulating photophobia / light
   sensitivity. Applies `1/(1+exp(-12*(t-mid)))` blend toward white. Adjustable
-  midpoint threshold.
-- **Exposure (E button)**: Manual exposure time and ISO control via
-  `MediaStreamTrack.applyConstraints`. Only shown when the camera supports manual
-  exposure mode. Two logarithmic sliders appear: ET and ISO.
+  midpoint via the threshold slider when Glare is on.
+- **Exposure** (top bar): Manual exposure time and ISO control via
+  `MediaStreamTrack.applyConstraints`. The **Exposure** pill is hidden until
+  `getCapabilities()` reports `exposureMode` including `manual` and a defined
+  `exposureTime` range. When Exposure is toggled on, logarithmic **ET** and (if
+  supported) **ISO** sliders appear at the bottom.
 
   The ET and ISO sliders are coupled so that the combination is guaranteed to
   start producing wash-out at approximately 1000 lux — the illuminance at which
@@ -214,14 +239,15 @@ setting `srcObject` ensure playback starts across all browsers.
 
 ## Known issues
 
-- **Manual exposure (E button) is Android Chrome only.** The `exposureTime` and
-  `iso` capabilities in `MediaStreamTrack.getCapabilities()` are part of the
-  W3C mediacapture-image spec but only implemented in Chrome on Android (since
-  Chrome 72). iOS Safari does not support them — all iOS browsers use WebKit,
-  which has no `exposureTime` or `iso` implementation. The E button correctly
-  does not appear on iOS because the capability detection finds neither
-  property. There is no web API workaround for manual shutter speed on iOS.
+- **Manual exposure (Exposure pill) is effectively Android Chrome only.** The
+  `exposureTime` and `iso` capabilities in `MediaStreamTrack.getCapabilities()`
+  are part of the W3C mediacapture-image spec but only implemented in Chrome on
+  Android (since Chrome 72). iOS Safari does not support them — all iOS browsers
+  use WebKit, which has no `exposureTime` or `iso` implementation. The Exposure
+  control stays hidden on iOS because capability detection does not find manual
+  `exposureTime`. There is no web API workaround for manual shutter speed on iOS.
 - iOS Safari (not Chrome) may still show a frozen first frame on initial load.
-  Cycling cameras via the C button works around this.
+  Switching cameras via **Settings → Camera** works around this when multiple
+  rear cameras exist.
 - `InputDeviceInfo.getCapabilities()` is not available in Firefox. The label-based
   fallback handles this.
