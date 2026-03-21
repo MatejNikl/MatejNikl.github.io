@@ -273,6 +273,7 @@ void main() {
       texSourceCanvas: null,
       texSourceCtx: null,
       useCanvasWorkaround: false,
+      _glLifecycleBound: false,
       caps: null,
       supportsET: false,
       supportsISO: false,
@@ -347,16 +348,29 @@ void main() {
 
         gl.uniform1i(this.glUniforms.uVideo, 0);
 
-        this.canvas.addEventListener('webglcontextlost', (e) => {
-          e.preventDefault();
-          if (this.rafId) cancelAnimationFrame(this.rafId);
-        });
-        this.canvas.addEventListener('webglcontextrestored', () => {
-          this.initGL();
-          this.processFrame();
-        });
+        if (!this._glLifecycleBound) {
+          this._glLifecycleBound = true;
+          this.canvas.addEventListener('webglcontextlost', (e) => {
+            e.preventDefault();
+            if (this.rafId) cancelAnimationFrame(this.rafId);
+          });
+          this.canvas.addEventListener('webglcontextrestored', () => {
+            this.initGL();
+            if (this.video.readyState >= 2) {
+              this.resetVideoTextureWorkaround();
+              this.detectTexImageVideoSupport();
+            }
+            this.processFrame();
+          });
+        }
 
         return true;
+      },
+
+      resetVideoTextureWorkaround() {
+        this.useCanvasWorkaround = false;
+        this.texSourceCanvas = null;
+        this.texSourceCtx = null;
       },
 
       detectTexImageVideoSupport() {
@@ -409,7 +423,19 @@ void main() {
       },
 
       detectCapabilities() {
-        if (!this.track.getCapabilities) return;
+        this.btnET.classList.add('hidden');
+        this.supportsET = false;
+        this.supportsISO = false;
+        if (!this.track?.getCapabilities) {
+          if (this.etOn) {
+            this.etOn = false;
+            this.btnET.classList.remove('on');
+            this.etRow.style.display = 'none';
+            this.manualET = null;
+            void this.resetExposure();
+          }
+          return;
+        }
         this.caps = this.track.getCapabilities();
         console.log('Camera capabilities:', this.caps);
 
@@ -421,6 +447,12 @@ void main() {
 
         if (this.supportsET) {
           this.btnET.classList.remove('hidden');
+        } else if (this.etOn) {
+          this.etOn = false;
+          this.btnET.classList.remove('on');
+          this.etRow.style.display = 'none';
+          this.manualET = null;
+          void this.resetExposure();
         }
 
         this.aperture = 1.8;
@@ -492,10 +524,13 @@ void main() {
             });
             this.track = this.stream.getVideoTracks()[0];
             this.video.srcObject = this.stream;
-            this.video.onloadedmetadata = () => {
+            this.video.onloadedmetadata = async () => {
               this.updateCanvasSize();
+              this.resetVideoTextureWorkaround();
+              this.detectTexImageVideoSupport();
               this.updateBlurCSS();
               this.detectCapabilities();
+              if (this.etOn && this.supportsET) await this.applyET();
             };
             await this.video.play();
             this.camSelect.value = this.cameraIndex;
@@ -525,6 +560,7 @@ void main() {
       },
 
       getETFromSlider() {
+        if (!this.caps?.exposureTime) return 0;
         const val = parseInt(this.etSlider.value);
         const { min, max } = this.caps.exposureTime;
         const etFloor = this.getETFloor();
@@ -537,6 +573,7 @@ void main() {
       },
 
       async applyET() {
+        if (!this.track || !this.caps?.exposureTime) return;
         const et = this.getETFromSlider();
         this.manualET = et;
         this.etVal.textContent = et + '\xB5s';
