@@ -178,7 +178,7 @@
     <div id="blur-row" class="slider-row" style="display:flex">
       <label>Sharpness</label>
       <input type="range" id="blur-slider" min="50" max="300" value="100" step="25">
-      <label id="blur-val" class="val">0.10</label>
+      <label id="blur-val" class="val">0.100</label>
     </div>
     <div id="et-row" class="slider-row">
       <label>Shutter</label>
@@ -655,7 +655,7 @@ void main() {
 
       onBlurChange() {
         this.blurVA = parseInt(this.blurSlider.value) / 1000;
-        this.blurVal.textContent = this.blurVA.toFixed(2);
+        this.blurVal.textContent = this.blurVA.toFixed(3);
         this.updateBlurCSS();
       },
 
