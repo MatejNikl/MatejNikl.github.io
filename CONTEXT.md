@@ -12,9 +12,9 @@ Controls are anchored top-right unless noted.
   bottom (visual acuity as a decimal, e.g. 0.10 ≈ 20/200).
 - **Exposure**: Shown only when `getCapabilities()` reports `exposureMode`
   including `manual` and an `exposureTime` range. Toggles manual exposure mode;
-  when on, **ET** and **ISO**
-  logarithmic sliders appear at the bottom. The **ISO** row appears only if the
-  camera also exposes `iso` in capabilities.
+  when on, a logarithmic **ET** (exposure time) slider appears at the bottom. If
+  the camera exposes `iso` in capabilities, **ISO is fixed at 400** (clamped to
+  the hardware min/max) on every `applyConstraints` call — there is no ISO slider.
 - **Settings** (gear): Opens a panel below the gear with:
   - **Glare**: Sigmoid photophobia simulation on/off; when on, a **threshold**
     slider adjusts the sigmoid midpoint.
@@ -190,19 +190,29 @@ starts across all browsers.
 - **Glare** (Settings): Sigmoid wash-out simulating photophobia / light
   sensitivity. Applies `1/(1+exp(-12*(t-mid)))` blend toward white. Adjustable
   midpoint via the threshold slider when Glare is on.
-- **Exposure** (top bar): Manual exposure time and ISO control via
-  `MediaStreamTrack.applyConstraints`. The **Exposure** pill is hidden until
-  `getCapabilities()` reports `exposureMode` including `manual` and a defined
-  `exposureTime` range. When Exposure is toggled on, logarithmic **ET** and (if
-  supported) **ISO** sliders appear at the bottom.
+- **Exposure** (top bar): Manual exposure time via `MediaStreamTrack.applyConstraints`,
+  with **ISO held fixed at 400** when the camera supports setting `iso` (clamped
+  to `[iso.min, iso.max]` so odd hardware ranges still work). The **Exposure**
+  pill is hidden until `getCapabilities()` reports `exposureMode` including
+  `manual` and a defined `exposureTime` range. When Exposure is toggled on, a
+  logarithmic **ET** slider appears at the bottom.
 
-  The ET and ISO sliders are coupled so that the combination is guaranteed to
-  start producing wash-out at approximately 1000 lux — the illuminance at which
-  rod saturation overwhelms an achromat's vision.
+  **Why fixed ISO 400:** It matches the empirical calibration on the Samsung S22
+  (f/1.8) used to derive `C_emp ≈ 30.86`. It is a sensible mid-gain default for
+  phone cameras — not universal, but stable and easy to reason about.
+  **Semi-automatic ISO** (manual shutter while the ISP freely adjusts gain) is not
+  relied on: hybrid constraint behavior is inconsistent across devices, and
+  reading real-time ISO from `getSettings()` is unreliable on many Android
+  browsers (often dummy values), so the app does not try to track or follow auto
+  ISO in software.
 
-  The coupling uses the incident-light exposure formula `t = N² × C / (E × S)`,
-  where `N` is the f-number (aperture), `C` is a calibration constant, `E` is
-  illuminance (lux), and `S` is ISO. Rearranging for the ET floor:
+  The **ET** slider’s minimum is an **ET floor** derived so that, at the fixed
+  ISO above, lengthening exposure from that point loosely aligns with “wash-out
+  territory” around **~1000 lux** — the illuminance at which rod saturation
+  overwhelms an achromat’s vision in the model.
+
+  The floor uses the incident-light exposure formula `t = N² × C / (E × S)`,
+  rearranged with fixed `E_overwhelm = 1000` and `S =` fixed ISO:
 
   ```
   ET_floor [µs] = N² × C_emp × 1e6 / (E_overwhelm × ISO)
@@ -210,32 +220,22 @@ starts across all browsers.
 
   The standard calibration constant is `C = 250`, but phone camera ISP pipelines
   (tone mapping, auto-gain) make the image brighter than a raw sensor reading.
-  Empirical testing on the Samsung S22 (f/1.8) showed that ISO 400 + 250 µs
-  already produces overwhelm at ~1000 lux, whereas the standard formula predicts
-  ~2025 µs. Solving backwards gives `C_emp ≈ 30.86`.
+  Empirical testing on the Samsung S22 showed that ISO 400 + 250 µs already
+  produces overwhelm at ~1000 lux, whereas the standard formula predicts ~2025 µs.
+  Solving backwards gives `C_emp ≈ 30.86`.
 
   The aperture `N` is hardcoded at 1.8 (typical main camera on modern phones).
-  The Web API (`getSettings()`) does not expose f-number, so per-lens adjustment
-  is not possible. On multi-camera phones the telephoto may have f/2.4, which
-  would shift the ET floor — but since we can't detect it, the calibration is
-  slightly off for non-primary lenses.
+  The Web API does not expose f-number, so per-lens adjustment is not possible.
+  On multi-camera phones the telephoto may have f/2.4, which would shift the ET
+  floor — but since we can't detect it, the calibration is slightly off for
+  non-primary lenses.
 
-  When the user changes ISO, the ET floor is recomputed. If the current ET is
-  below the new floor, the ET slider snaps up to the floor position. This
-  ensures the ~1000 lux overwhelm point is maintained regardless of ISO.
+  If the camera does not expose `iso` in capabilities, constraints send only
+  `exposureTime`; the ET floor math still assumes **ISO 400** for the same
+  calibration curve (the device’s actual gain is then whatever the ISP applies).
 
-  ISO defaults to 400 when entering manual mode. Higher ISO (e.g., 800)
-  simulates greater rod sensitivity but lowers the ET floor (more easily
-  overwhelmed). Lower ISO (e.g., 200) raises the ET floor (less easily
-  overwhelmed).
-
-  The ISO slider has a computed lower bound (`isoFloor`) that prevents the ET
-  floor from exceeding the hardware ET maximum. Setting `ET_floor = ET_hw_max`
-  and solving: `ISO_min = N² × C_emp × 1e6 / (1000 × ET_hw_max)`. For f/1.8
-  with ET_hw_max = 1000 µs this gives ISO 100. Without this bound, low ISO
-  values produce an ET floor above the hardware maximum, which inverts the
-  logarithmic slider mapping. The ET value is also clamped to hardware bounds
-  as a safety net.
+  ET is clamped to hardware min/max; if `ET_floor` exceeds the hardware maximum,
+  the slider range collapses toward the long-exposure end as a safety net.
 
 ## Known issues
 

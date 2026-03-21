@@ -185,11 +185,6 @@
       <input type="range" id="et-slider" min="1" max="100" value="50">
       <label id="et-val" class="val">--</label>
     </div>
-    <div id="iso-row" class="slider-row">
-      <label>ISO</label>
-      <input type="range" id="iso-slider" min="1" max="100" value="50">
-      <label id="iso-val" class="val">--</label>
-    </div>
   </div>
   <script>
     const VERT_SRC = `
@@ -258,9 +253,6 @@ void main() {
       etRow: document.getElementById('et-row'),
       etSlider: document.getElementById('et-slider'),
       etVal: document.getElementById('et-val'),
-      isoRow: document.getElementById('iso-row'),
-      isoSlider: document.getElementById('iso-slider'),
-      isoVal: document.getElementById('iso-val'),
       sigRow: document.getElementById('sig-row'),
       sigSlider: document.getElementById('sig-slider'),
       sigVal: document.getElementById('sig-val'),
@@ -285,7 +277,6 @@ void main() {
       supportsET: false,
       supportsISO: false,
       aperture: 1.8,
-      isoFloor: 100,
       grayscaleOn: true,
       grayMode: 'scotopic',
       etOn: false,
@@ -434,14 +425,8 @@ void main() {
 
         this.aperture = 1.8;
         console.log('Aperture (assumed):', this.aperture);
-
         if (this.supportsISO && this.supportsET) {
-          const N = this.aperture;
-          const etMax = this.caps.exposureTime.max;
-          this.isoFloor = Math.max(this.caps.iso.min,
-            Math.ceil(N * N * 30.86 * 1e6 / (1000 * etMax)));
-          console.log('ISO floor:', this.isoFloor);
-          this.setISOSliderTo(400);
+          console.log('Fixed ISO for constraints:', this.getFixedISO());
         }
       },
 
@@ -521,46 +506,22 @@ void main() {
         }
       },
 
+      /** ISO applied with manual ET when the camera supports it; matches S22 calibration. */
+      FIXED_ISO: 400,
+
+      getFixedISO() {
+        const target = this.FIXED_ISO;
+        if (!this.supportsISO || !this.caps?.iso) return target;
+        const { min, max } = this.caps.iso;
+        return Math.round(Math.max(min, Math.min(target, max)));
+      },
+
       getETFloor() {
         const C_EMP = 30.86;
         const E_OVERWHELM = 1000;
         const N = this.aperture;
-        const iso = this.getISOFromSlider();
+        const iso = this.getFixedISO();
         return N * N * C_EMP * 1e6 / (E_OVERWHELM * iso);
-      },
-
-      getISOFromSlider() {
-        if (!this.supportsISO) return 400;
-        const val = parseInt(this.isoSlider.value);
-        const effectiveMin = Math.max(this.caps.iso.min, this.isoFloor);
-        const max = this.caps.iso.max;
-        const logMin = Math.log(effectiveMin);
-        const logMax = Math.log(max);
-        const t = (val - 1) / 99;
-        return Math.round(Math.exp(logMin + t * (logMax - logMin)));
-      },
-
-      setISOSliderTo(target) {
-        if (!this.supportsISO) return;
-        const effectiveMin = Math.max(this.caps.iso.min, this.isoFloor);
-        const max = this.caps.iso.max;
-        const clamped = Math.max(effectiveMin, Math.min(target, max));
-        const logMin = Math.log(effectiveMin);
-        const logMax = Math.log(max);
-        const t = (Math.log(clamped) - logMin) / (logMax - logMin);
-        this.isoSlider.value = Math.round(1 + t * 99);
-        this.isoVal.textContent = this.getISOFromSlider();
-      },
-
-      setETSliderTo(target) {
-        const { min, max } = this.caps.exposureTime;
-        const etFloor = this.getETFloor();
-        const effectiveMin = Math.min(Math.max(min, etFloor), max);
-        const clamped = Math.max(effectiveMin, Math.min(target, max));
-        const logMin = Math.log(effectiveMin);
-        const logMax = Math.log(max);
-        const t = (Math.log(clamped) - logMin) / (logMax - logMin);
-        this.etSlider.value = Math.round(1 + t * 99);
       },
 
       getETFromSlider() {
@@ -575,19 +536,12 @@ void main() {
           Math.round(Math.exp(logMin + t * (logMax - logMin)))));
       },
 
-      async onISOChange() {
-        this.isoVal.textContent = this.getISOFromSlider();
-        const prevET = this.manualET || this.getETFromSlider();
-        this.setETSliderTo(prevET);
-        await this.applyET();
-      },
-
       async applyET() {
         const et = this.getETFromSlider();
         this.manualET = et;
         this.etVal.textContent = et + '\xB5s';
         const constraint = { exposureMode: 'manual', exposureTime: et };
-        if (this.supportsISO) constraint.iso = this.getISOFromSlider();
+        if (this.supportsISO) constraint.iso = this.getFixedISO();
         try {
           await this.track.applyConstraints({ advanced: [constraint] });
         } catch (e) {
@@ -613,11 +567,9 @@ void main() {
         this.btnET.classList.toggle('on', this.etOn);
         if (this.etOn) {
           this.etRow.style.display = 'flex';
-          if (this.supportsISO) this.isoRow.style.display = 'flex';
           await this.applyET();
         } else {
           this.etRow.style.display = 'none';
-          this.isoRow.style.display = 'none';
           await this.resetExposure();
         }
       },
@@ -747,7 +699,6 @@ void main() {
     document.getElementById('btn-settings').addEventListener('click', () => sim.toggleSettings());
     document.getElementById('cam-select').addEventListener('change', () => sim.onCameraSelectChange());
     document.getElementById('et-slider').addEventListener('input', () => sim.applyET());
-    document.getElementById('iso-slider').addEventListener('input', () => sim.onISOChange());
     document.getElementById('sig-slider').addEventListener('input', () => sim.onSigmoidThresholdChange());
     document.getElementById('blur-slider').addEventListener('input', () => sim.onBlurChange());
     document.getElementById('gray-mode').addEventListener('change', () => sim.onGrayModeChange());
