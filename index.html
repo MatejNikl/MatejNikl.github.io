@@ -403,23 +403,47 @@ void main() {
           return;
         }
         try {
-          this.stream = await navigator.mediaDevices.getUserMedia({
+          const stream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
           });
-          this.track = this.stream.getVideoTracks()[0];
-          this.video.srcObject = this.stream;
-          this.video.onloadedmetadata = async () => {
-            this.updateCanvasSize();
-            this.updateBlurCSS();
-            this.detectTexImageVideoSupport();
-            this.detectCapabilities();
-            await this.enumerateCameras();
-            this.processFrame();
-          };
-          await this.video.play();
+          await this.attachAndPrepareStream(stream);
+          await this.enumerateCameras();
+          this.processFrame();
         } catch (err) {
           this.showError(`Camera failed: ${err.message}`);
         }
+      },
+
+      async applyStreamMetadataPipeline() {
+        this.updateCanvasSize();
+        this.resetVideoTextureWorkaround();
+        this.detectTexImageVideoSupport();
+        this.updateBlurCSS();
+        this.detectCapabilities();
+        if (this.etOn && this.supportsET) await this.applyET();
+      },
+
+      /**
+       * Assign stream, wait for loadedmetadata, then run canvas/WebGL/camera pipeline.
+       * Ensures enumerateCameras → switchCamera finishes sizing the *current* track before callers continue.
+       */
+      async attachAndPrepareStream(stream) {
+        this.stream = stream;
+        this.track = stream.getVideoTracks()[0];
+        this.video.onloadedmetadata = null;
+        await new Promise((resolve, reject) => {
+          const onMeta = async () => {
+            try {
+              await this.applyStreamMetadataPipeline();
+              resolve();
+            } catch (e) {
+              reject(e);
+            }
+          };
+          this.video.addEventListener('loadedmetadata', onMeta, { once: true });
+          this.video.srcObject = stream;
+          this.video.play().catch(reject);
+        });
       },
 
       detectCapabilities() {
@@ -519,20 +543,10 @@ void main() {
         for (let attempt = 0; attempt < 3; attempt++) {
           await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
           try {
-            this.stream = await navigator.mediaDevices.getUserMedia({
+            const stream = await navigator.mediaDevices.getUserMedia({
               video: { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
             });
-            this.track = this.stream.getVideoTracks()[0];
-            this.video.srcObject = this.stream;
-            this.video.onloadedmetadata = async () => {
-              this.updateCanvasSize();
-              this.resetVideoTextureWorkaround();
-              this.detectTexImageVideoSupport();
-              this.updateBlurCSS();
-              this.detectCapabilities();
-              if (this.etOn && this.supportsET) await this.applyET();
-            };
-            await this.video.play();
+            await this.attachAndPrepareStream(stream);
             this.camSelect.value = this.cameraIndex;
             return;
           } catch (err) {
