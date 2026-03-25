@@ -136,7 +136,7 @@
   <div class="controls">
     <div id="btn-gray" class="pill on" title="Turn off to see the camera in full color">Grayscale</div>
     <div id="btn-blur" class="pill on">Blur</div>
-    <div id="btn-et" class="pill hidden" title="Manual shutter and ISO — simulates very bright light">Bright light</div>
+    <div id="btn-et" class="pill hidden" title="Simulates glare / photophobia in bright conditions">Glare</div>
     <div id="btn-settings" class="pill pill-gear" title="Settings">&#x2699;</div>
   </div>
   <div id="settings-panel">
@@ -224,8 +224,8 @@ void main() {
         grayscale: 'Grayscale',
         grayscaleTitle: 'Turn off to see the camera in full color',
         blur: 'Blur',
-        brightLight: 'Bright light',
-        brightLightTitle: 'Manual shutter and ISO — simulates very bright light',
+        glare: 'Glare',
+        glareTitle: 'Simulates glare / photophobia in bright conditions',
         settingsTitle: 'Settings',
         grayType: 'Grayscale type',
         grayScience: 'Science-based',
@@ -247,8 +247,8 @@ void main() {
         grayscale: 'Stupně šedi',
         grayscaleTitle: 'Vypněte pro barevný obraz z kamery',
         blur: 'Rozmazání',
-        brightLight: 'Jasné světlo',
-        brightLightTitle: 'Ruční závěrka a ISO — simuluje velmi jasné světlo',
+        glare: 'Oslnění',
+        glareTitle: 'Simuluje oslnění při jasném osvětlení',
         settingsTitle: 'Nastavení',
         grayType: 'Typ stupňů šedi',
         grayScience: 'Vědecky podložené',
@@ -782,8 +782,8 @@ void main() {
         this.btnGray.textContent = t.grayscale;
         this.btnGray.title = t.grayscaleTitle;
         this.btnBlur.textContent = t.blur;
-        this.btnET.textContent = t.brightLight;
-        this.btnET.title = t.brightLightTitle;
+        this.btnET.textContent = t.glare;
+        this.btnET.title = t.glareTitle;
         this.btnSettings.title = t.settingsTitle;
         document.getElementById('label-gray-type').textContent = t.grayType;
         document.getElementById('label-language').textContent = t.langLabel;
