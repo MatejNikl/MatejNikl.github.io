@@ -484,7 +484,7 @@ void main() {
           this._glLifecycleBound = true;
           this.canvas.addEventListener('webglcontextlost', (e) => {
             e.preventDefault();
-            if (this.rafId) cancelAnimationFrame(this.rafId);
+            if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = null; }
           });
           this.canvas.addEventListener('webglcontextrestored', () => {
             this.initGL();
@@ -856,10 +856,7 @@ void main() {
 
       processFrame() {
         const gl = this.gl;
-        if (!gl || gl.isContextLost()) {
-          this.rafId = requestAnimationFrame(() => this.processFrame());
-          return;
-        }
+        if (!gl || gl.isContextLost()) return;
 
         this.uploadVideoTexture();
 
