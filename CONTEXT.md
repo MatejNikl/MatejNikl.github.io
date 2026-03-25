@@ -20,15 +20,18 @@ Controls are anchored top-right unless noted.
   the bottom (still driven by visual acuity internally, e.g. 0.10 ≈ 20/200 — higher
   value means sharper / less blur).
 - **Glare**: Shown only when `getCapabilities()` reports `exposureMode`
-  including `manual` and an `exposureTime` range. Toggles manual exposure mode;
-  when on, a logarithmic **Shutter** (exposure time) slider appears at the bottom. If
-  the camera exposes `iso` in capabilities, **ISO is fixed at 400** (clamped to
+  including `manual` and an `exposureTime` range. **On by default** at the
+  shortest ET (the ET floor, ~250 µs), which is enough to show realistic glare
+  in normally-lit and bright conditions. Toggles manual exposure mode; if the
+  camera exposes `iso` in capabilities, **ISO is fixed at 400** (clamped to
   the hardware min/max) on every `applyConstraints` call — there is no ISO slider.
 - **Settings** (gear): Opens a panel below the gear with:
   - **Grayscale type**: Dropdown — **Science-based** (scotopic / rod-weighted
     luminance in the shader) vs **Plain B&W** (Rec. 601) when grayscale is on.
   - **Language**: Dropdown — **System default**, **English**, or **Czech** (see
     **Language** paragraph above).
+  - **Shutter**: Logarithmic ET slider, shown when Glare is on. Adjusts the
+    manual exposure time from the ET floor (~250 µs) up to the camera's maximum.
   - **Camera**: Dropdown listing rear cameras, only when more than one was
     detected after enumeration.
 
@@ -196,8 +199,10 @@ Manual exposure time via `MediaStreamTrack.applyConstraints`,
 with **ISO held fixed at 400** when the camera supports setting `iso` (clamped
 to `[iso.min, iso.max]` so odd hardware ranges still work). The **Glare**
 pill is hidden until `getCapabilities()` reports `exposureMode` including
-`manual` and a defined `exposureTime` range. When it is toggled on, a
-logarithmic **Shutter** (ET) slider appears at the bottom.
+`manual` and a defined `exposureTime` range. It is **on by default** at the
+shortest ET (the ET floor), so the simulator shows realistic glare out of the
+box in normally-lit environments. A logarithmic **Shutter** slider in
+**Settings** lets the user increase the ET for more wash-out.
 
 **Why fixed ISO 400:** It matches the empirical calibration on the Samsung S22
 (f/1.8) used to derive `C_emp ≈ 30.86`. It is a sensible mid-gain default for
