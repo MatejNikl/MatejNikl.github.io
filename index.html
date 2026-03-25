@@ -95,19 +95,6 @@
       padding: 4px 6px;
       font-size: 12px;
     }
-    .settings-row .setting-pill {
-      padding: 4px 10px;
-      border-radius: 14px;
-      border: 1px solid rgba(255,255,255,0.25);
-      background: transparent;
-      color: #999;
-      font-size: 12px;
-      cursor: pointer;
-      -webkit-tap-highlight-color: transparent;
-      user-select: none;
-    }
-    .settings-row .setting-pill:active { background: rgba(255,255,255,0.1); }
-    .settings-row .setting-pill.on { border-color: rgba(255,255,255,0.6); color: #fff; }
     #sliders {
       position: absolute;
       bottom: 20px;
@@ -154,15 +141,6 @@
   </div>
   <div id="settings-panel">
     <div class="settings-row">
-      <label id="label-glare">Glare</label>
-      <div id="btn-sig" class="setting-pill">off</div>
-    </div>
-    <div id="sig-row" class="settings-row" style="display:none">
-      <label id="label-strength">Strength</label>
-      <input type="range" id="sig-slider" min="30" max="80" value="60">
-      <span id="sig-val" class="val">0.50</span>
-    </div>
-    <div class="settings-row">
       <label id="label-gray-type">Grayscale type</label>
       <select id="gray-mode">
         <option value="scotopic" selected>Science-based</option>
@@ -208,8 +186,6 @@ precision mediump float;
 uniform sampler2D uVideo;
 uniform bool uGrayscale;
 uniform int uGrayMode;
-uniform bool uSigmoid;
-uniform float uSigmoidMid;
 varying vec2 vTexCoord;
 
 vec3 srgbToLinear(vec3 c) {
@@ -227,23 +203,16 @@ float linearToSrgb(float c) {
 void main() {
     vec2 uv = vec2(vTexCoord.x, 1.0 - vTexCoord.y);
     vec4 color = texture2D(uVideo, uv);
-    float lum = 0.0;
 
     if (uGrayscale) {
+        float lum;
         if (uGrayMode == 0) {
             vec3 lin = srgbToLinear(color.rgb);
-            float linLum = dot(lin, vec3(0.007, 0.519, 0.474));
-            lum = linearToSrgb(linLum);
+            lum = linearToSrgb(dot(lin, vec3(0.007, 0.519, 0.474)));
         } else {
             lum = dot(color.rgb, vec3(0.299, 0.587, 0.114));
         }
         color = vec4(vec3(lum), 1.0);
-    }
-
-    if (uSigmoid) {
-        float t = uGrayscale ? lum : dot(color.rgb, vec3(0.333333));
-        float blend = 1.0 / (1.0 + exp(-12.0 * (t - uSigmoidMid)));
-        color.rgb = color.rgb + blend * (1.0 - color.rgb);
     }
 
     gl_FragColor = color;
@@ -258,10 +227,6 @@ void main() {
         brightLight: 'Bright light',
         brightLightTitle: 'Manual shutter and ISO — simulates very bright light',
         settingsTitle: 'Settings',
-        glare: 'Glare',
-        glareOff: 'off',
-        glareOn: 'on',
-        strength: 'Strength',
         grayType: 'Grayscale type',
         grayScience: 'Science-based',
         grayPlain: 'Plain B&W',
@@ -285,10 +250,6 @@ void main() {
         brightLight: 'Jasné světlo',
         brightLightTitle: 'Ruční závěrka a ISO — simuluje velmi jasné světlo',
         settingsTitle: 'Nastavení',
-        glare: 'Oslnění',
-        glareOff: 'vypnuto',
-        glareOn: 'zapnuto',
-        strength: 'Síla',
         grayType: 'Typ stupňů šedi',
         grayScience: 'Vědecky podložené',
         grayPlain: 'Obyčejná černobílá',
@@ -339,15 +300,11 @@ void main() {
       errorDiv: document.getElementById('error'),
       btnGray: document.getElementById('btn-gray'),
       btnET: document.getElementById('btn-et'),
-      btnSig: document.getElementById('btn-sig'),
       btnSettings: document.getElementById('btn-settings'),
       settingsPanel: document.getElementById('settings-panel'),
       etRow: document.getElementById('et-row'),
       etSlider: document.getElementById('et-slider'),
       etVal: document.getElementById('et-val'),
-      sigRow: document.getElementById('sig-row'),
-      sigSlider: document.getElementById('sig-slider'),
-      sigVal: document.getElementById('sig-val'),
       grayModeSelect: document.getElementById('gray-mode'),
       btnBlur: document.getElementById('btn-blur'),
       blurRow: document.getElementById('blur-row'),
@@ -374,9 +331,7 @@ void main() {
       grayscaleOn: true,
       grayMode: 'scotopic',
       etOn: false,
-      sigmoidOn: false,
       manualET: null,
-      sigmoidMidpoint: 0.50,
       blurOn: true,
       blurVA: 0.10,
       settingsOpen: false,
@@ -421,8 +376,6 @@ void main() {
           uVideo: gl.getUniformLocation(prog, 'uVideo'),
           uGrayscale: gl.getUniformLocation(prog, 'uGrayscale'),
           uGrayMode: gl.getUniformLocation(prog, 'uGrayMode'),
-          uSigmoid: gl.getUniformLocation(prog, 'uSigmoid'),
-          uSigmoidMid: gl.getUniformLocation(prog, 'uSigmoidMid'),
         };
 
         const quad = new Float32Array([-1,-1, 1,-1, -1,1, 1,1]);
@@ -522,8 +475,6 @@ void main() {
         const u = this.glUniforms;
         gl.uniform1i(u.uGrayscale, this.grayscaleOn ? 1 : 0);
         gl.uniform1i(u.uGrayMode, this.grayMode === 'scotopic' ? 0 : 1);
-        gl.uniform1i(u.uSigmoid, this.sigmoidOn ? 1 : 0);
-        gl.uniform1f(u.uSigmoidMid, this.sigmoidMidpoint);
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
@@ -775,19 +726,6 @@ void main() {
         this.grayMode = this.grayModeSelect.value;
       },
 
-      toggleSigmoid() {
-        this.sigmoidOn = !this.sigmoidOn;
-        this.btnSig.classList.toggle('on', this.sigmoidOn);
-        const t = this.strings;
-        this.btnSig.textContent = this.sigmoidOn ? t.glareOn : t.glareOff;
-        this.sigRow.style.display = this.sigmoidOn ? 'flex' : 'none';
-      },
-
-      onSigmoidThresholdChange() {
-        this.sigmoidMidpoint = (110 - parseInt(this.sigSlider.value)) / 100;
-        this.sigVal.textContent = this.sigmoidMidpoint.toFixed(2);
-      },
-
       toggleBlur() {
         this.blurOn = !this.blurOn;
         this.btnBlur.classList.toggle('on', this.blurOn);
@@ -847,8 +785,6 @@ void main() {
         this.btnET.textContent = t.brightLight;
         this.btnET.title = t.brightLightTitle;
         this.btnSettings.title = t.settingsTitle;
-        document.getElementById('label-glare').textContent = t.glare;
-        document.getElementById('label-strength').textContent = t.strength;
         document.getElementById('label-gray-type').textContent = t.grayType;
         document.getElementById('label-language').textContent = t.langLabel;
         document.getElementById('label-camera').textContent = t.camera;
@@ -865,7 +801,6 @@ void main() {
         if (optEn)   optEn.textContent = t.langEn;
         if (optCs)   optCs.textContent = t.langCs;
         this.langSelect.value = readLocaleOverride() || 'auto';
-        this.btnSig.textContent = this.sigmoidOn ? t.glareOn : t.glareOff;
         if (this.errorDiv.style.display === 'block' && this._lastErrorKey) {
           this.showError(this._lastErrorKey, ...(this._lastErrorParams || []));
         }
@@ -897,12 +832,10 @@ void main() {
 
     sim.btnGray.addEventListener('click', () => sim.toggleGrayscale());
     sim.btnET.addEventListener('click', () => sim.toggleET());
-    sim.btnSig.addEventListener('click', () => sim.toggleSigmoid());
     sim.btnBlur.addEventListener('click', () => sim.toggleBlur());
     sim.btnSettings.addEventListener('click', () => sim.toggleSettings());
     sim.camSelect.addEventListener('change', () => sim.onCameraSelectChange());
     sim.etSlider.addEventListener('input', () => sim.applyET());
-    sim.sigSlider.addEventListener('input', () => sim.onSigmoidThresholdChange());
     sim.blurSlider.addEventListener('input', () => sim.onBlurChange());
     sim.grayModeSelect.addEventListener('change', () => sim.onGrayModeChange());
     sim.langSelect.addEventListener('change', () => sim.onLanguageChange());
