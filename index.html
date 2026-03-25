@@ -886,8 +886,10 @@ void main() {
       },
 
       cleanup() {
-        if (this.rafId) cancelAnimationFrame(this.rafId);
-        if (this.stream) this.stream.getTracks().forEach(t => t.stop());
+        if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = null; }
+        if (this.stream) { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
+        this.track = null;
+        this.gl = null;
       }
     };
 
