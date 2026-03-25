@@ -281,8 +281,11 @@ newET     = clamp(round(exp(logNew)), etFloor, etMax)
 
 Log-space interpolation matches the logarithmic nature of exposure (each
 doubling of ET doubles brightness). The damping factor (0.15) smooths
-convergence to ~1–2 seconds at the ~3 Hz metering rate, preventing flicker.
-A dead-band of 5% relative change avoids redundant `applyConstraints` calls.
+convergence to ~1–2 seconds at the ~3 Hz metering rate, preventing
+overshoot from the ~400–500 ms round-trip latency (metering interval +
+camera HAL delay). A dead-band of 1% relative change avoids redundant
+`applyConstraints` calls without stalling convergence near the ET
+boundaries.
 
 **Interaction with the Shutter slider:** Auto-exposure is **on by default**
 whenever Glare is enabled. If the user manually moves the Shutter slider,
