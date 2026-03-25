@@ -893,17 +893,17 @@ void main() {
 
     applyLocaleToSim(sim);
 
-    document.getElementById('btn-gray').addEventListener('click', () => sim.toggleGrayscale());
-    document.getElementById('btn-et').addEventListener('click', () => sim.toggleET());
-    document.getElementById('btn-sig').addEventListener('click', () => sim.toggleSigmoid());
-    document.getElementById('btn-blur').addEventListener('click', () => sim.toggleBlur());
-    document.getElementById('btn-settings').addEventListener('click', () => sim.toggleSettings());
-    document.getElementById('cam-select').addEventListener('change', () => sim.onCameraSelectChange());
-    document.getElementById('et-slider').addEventListener('input', () => sim.applyET());
-    document.getElementById('sig-slider').addEventListener('input', () => sim.onSigmoidThresholdChange());
-    document.getElementById('blur-slider').addEventListener('input', () => sim.onBlurChange());
-    document.getElementById('gray-mode').addEventListener('change', () => sim.onGrayModeChange());
-    document.getElementById('lang-select').addEventListener('change', () => sim.onLanguageChange());
+    sim.btnGray.addEventListener('click', () => sim.toggleGrayscale());
+    sim.btnET.addEventListener('click', () => sim.toggleET());
+    sim.btnSig.addEventListener('click', () => sim.toggleSigmoid());
+    sim.btnBlur.addEventListener('click', () => sim.toggleBlur());
+    sim.btnSettings.addEventListener('click', () => sim.toggleSettings());
+    sim.camSelect.addEventListener('change', () => sim.onCameraSelectChange());
+    sim.etSlider.addEventListener('input', () => sim.applyET());
+    sim.sigSlider.addEventListener('input', () => sim.onSigmoidThresholdChange());
+    sim.blurSlider.addEventListener('input', () => sim.onBlurChange());
+    sim.grayModeSelect.addEventListener('change', () => sim.onGrayModeChange());
+    sim.langSelect.addEventListener('change', () => sim.onLanguageChange());
 
     let resizeTimeout;
     window.addEventListener('resize', () => {
