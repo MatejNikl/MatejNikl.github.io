@@ -333,43 +333,6 @@ void main() {
       return pickLocale();
     }
 
-    function applyLocaleToSim(sim) {
-      const effective = getEffectiveLocale();
-      sim.locale = effective;
-      sim.strings = I18N[effective] || I18N.en;
-      const t = sim.strings;
-      document.documentElement.lang = effective === 'cs' ? 'cs' : 'en';
-      document.title = t.title;
-      sim.btnGray.textContent = t.grayscale;
-      sim.btnGray.title = t.grayscaleTitle;
-      sim.btnBlur.textContent = t.blur;
-      sim.btnET.textContent = t.brightLight;
-      sim.btnET.title = t.brightLightTitle;
-      sim.btnSettings.title = t.settingsTitle;
-      document.getElementById('label-glare').textContent = t.glare;
-      document.getElementById('label-strength').textContent = t.strength;
-      document.getElementById('label-gray-type').textContent = t.grayType;
-      document.getElementById('label-language').textContent = t.langLabel;
-      document.getElementById('label-camera').textContent = t.camera;
-      document.getElementById('label-sharpness').textContent = t.sharpness;
-      document.getElementById('label-shutter').textContent = t.shutter;
-      const optS = sim.grayModeSelect.querySelector('option[value="scotopic"]');
-      const optR = sim.grayModeSelect.querySelector('option[value="rec601"]');
-      if (optS) optS.textContent = t.grayScience;
-      if (optR) optR.textContent = t.grayPlain;
-      const optAuto = sim.langSelect.querySelector('option[value="auto"]');
-      const optEn   = sim.langSelect.querySelector('option[value="en"]');
-      const optCs   = sim.langSelect.querySelector('option[value="cs"]');
-      if (optAuto) optAuto.textContent = t.langAuto;
-      if (optEn)   optEn.textContent = t.langEn;
-      if (optCs)   optCs.textContent = t.langCs;
-      sim.langSelect.value = readLocaleOverride() || 'auto';
-      sim.btnSig.textContent = sim.sigmoidOn ? t.glareOn : t.glareOff;
-      if (sim.errorDiv.style.display === 'block' && sim._lastErrorKey) {
-        sim.showError(sim._lastErrorKey, ...(sim._lastErrorParams || []));
-      }
-    }
-
     const sim = {
       video: document.getElementById('video'),
       canvas: document.getElementById('canvas'),
@@ -773,7 +736,44 @@ void main() {
             localStorage.setItem(LOCALE_STORAGE_KEY, v);
           }
         } catch (e) { /* private mode */ }
-        applyLocaleToSim(this);
+        this.applyLocale();
+      },
+
+      applyLocale() {
+        const effective = getEffectiveLocale();
+        this.locale = effective;
+        this.strings = I18N[effective] || I18N.en;
+        const t = this.strings;
+        document.documentElement.lang = effective === 'cs' ? 'cs' : 'en';
+        document.title = t.title;
+        this.btnGray.textContent = t.grayscale;
+        this.btnGray.title = t.grayscaleTitle;
+        this.btnBlur.textContent = t.blur;
+        this.btnET.textContent = t.brightLight;
+        this.btnET.title = t.brightLightTitle;
+        this.btnSettings.title = t.settingsTitle;
+        document.getElementById('label-glare').textContent = t.glare;
+        document.getElementById('label-strength').textContent = t.strength;
+        document.getElementById('label-gray-type').textContent = t.grayType;
+        document.getElementById('label-language').textContent = t.langLabel;
+        document.getElementById('label-camera').textContent = t.camera;
+        document.getElementById('label-sharpness').textContent = t.sharpness;
+        document.getElementById('label-shutter').textContent = t.shutter;
+        const optS = this.grayModeSelect.querySelector('option[value="scotopic"]');
+        const optR = this.grayModeSelect.querySelector('option[value="rec601"]');
+        if (optS) optS.textContent = t.grayScience;
+        if (optR) optR.textContent = t.grayPlain;
+        const optAuto = this.langSelect.querySelector('option[value="auto"]');
+        const optEn   = this.langSelect.querySelector('option[value="en"]');
+        const optCs   = this.langSelect.querySelector('option[value="cs"]');
+        if (optAuto) optAuto.textContent = t.langAuto;
+        if (optEn)   optEn.textContent = t.langEn;
+        if (optCs)   optCs.textContent = t.langCs;
+        this.langSelect.value = readLocaleOverride() || 'auto';
+        this.btnSig.textContent = this.sigmoidOn ? t.glareOn : t.glareOff;
+        if (this.errorDiv.style.display === 'block' && this._lastErrorKey) {
+          this.showError(this._lastErrorKey, ...(this._lastErrorParams || []));
+        }
       },
 
       toggleSigmoid() {
@@ -893,7 +893,7 @@ void main() {
       }
     };
 
-    applyLocaleToSim(sim);
+    sim.applyLocale();
 
     sim.btnGray.addEventListener('click', () => sim.toggleGrayscale());
     sim.btnET.addEventListener('click', () => sim.toggleET());
