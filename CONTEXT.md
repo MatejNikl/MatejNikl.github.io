@@ -283,9 +283,12 @@ Log-space interpolation matches the logarithmic nature of exposure (each
 doubling of ET doubles brightness). The damping factor (0.15) smooths
 convergence to ~1–2 seconds at the ~3 Hz metering rate, preventing
 overshoot from the ~400–500 ms round-trip latency (metering interval +
-camera HAL delay). A dead-band of 1% relative change avoids redundant
-`applyConstraints` calls without stalling convergence near the ET
-boundaries.
+camera HAL delay). A **luminance dead-band** (±0.02 around the target)
+suppresses noise-driven oscillation at equilibrium: if the measured
+brightness is within 0.02 of the target, the controller does not adjust.
+This avoids flicker from chasing sensor noise while never stalling
+convergence when the scene actually needs adaptation — far from the
+target the error is large and the dead-band is irrelevant.
 
 **Interaction with the Shutter slider:** Auto-exposure is **on by default**
 whenever Glare is enabled. If the user manually moves the Shutter slider,

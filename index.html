@@ -373,7 +373,7 @@ void main() {
       METER_EVERY_N: 10,
       AE_TARGET: 0.35,
       AE_DAMPING: 0.15,
-      AE_DEADBAND: 0.01,
+      AE_LUM_DEADBAND: 0.02,
       autoET: true,
       _etApplyPending: false,
 
@@ -837,6 +837,7 @@ void main() {
 
       autoAdjustET(measured) {
         if (!this.caps?.exposureTime || this._etApplyPending) return;
+        if (Math.abs(measured - this.AE_TARGET) < this.AE_LUM_DEADBAND) return;
         const { min, max } = this.caps.exposureTime;
         const etFloor = Math.max(min, this.getETFloor());
         const currentET = this.manualET || etFloor;
@@ -845,8 +846,6 @@ void main() {
         const logTarget = Math.log(Math.max(etFloor, Math.min(max, currentET * ratio)));
         const logNew = logCurrent + this.AE_DAMPING * (logTarget - logCurrent);
         const newET = Math.max(etFloor, Math.min(max, Math.round(Math.exp(logNew))));
-        const change = Math.abs(newET - currentET) / Math.max(currentET, 1);
-        if (change < this.AE_DEADBAND) return;
         this.manualET = newET;
         this.etVal.textContent = newET + '\xB5s';
         this.syncSliderToET(newET);
