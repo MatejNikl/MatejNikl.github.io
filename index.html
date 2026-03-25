@@ -487,6 +487,49 @@ void main() {
         }
       },
 
+      updateCanvasSize() {
+        const vw = this.video.videoWidth;
+        const vh = this.video.videoHeight;
+        if (!vw || !vh) return;
+        this.canvas.width = vw;
+        this.canvas.height = vh;
+        if (this.gl) this.gl.viewport(0, 0, vw, vh);
+        if (this.useCanvasWorkaround && this.texSourceCanvas) {
+          this.texSourceCanvas.width = vw;
+          this.texSourceCanvas.height = vh;
+        }
+      },
+
+      uploadVideoTexture() {
+        const gl = this.gl;
+        gl.bindTexture(gl.TEXTURE_2D, this.glTexture);
+        if (this.useCanvasWorkaround) {
+          const w = this.video.videoWidth;
+          const h = this.video.videoHeight;
+          this.texSourceCtx.drawImage(this.video, 0, 0, w, h);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.texSourceCanvas);
+        } else {
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.video);
+        }
+      },
+
+      processFrame() {
+        const gl = this.gl;
+        if (!gl || gl.isContextLost()) return;
+
+        this.uploadVideoTexture();
+
+        const u = this.glUniforms;
+        gl.uniform1i(u.uGrayscale, this.grayscaleOn ? 1 : 0);
+        gl.uniform1i(u.uGrayMode, this.grayMode === 'scotopic' ? 0 : 1);
+        gl.uniform1i(u.uSigmoid, this.sigmoidOn ? 1 : 0);
+        gl.uniform1f(u.uSigmoidMid, this.sigmoidMidpoint);
+
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+        this.rafId = requestAnimationFrame(() => this.processFrame());
+      },
+
       async start() {
         if (!this.initGL()) {
           this.showError('errWebGL');
@@ -539,14 +582,6 @@ void main() {
           this.video.srcObject = stream;
           this.video.play().catch(reject);
         });
-      },
-
-      disableET() {
-        this.etOn = false;
-        this.btnET.classList.remove('on');
-        this.etRow.style.display = 'none';
-        this.manualET = null;
-        void this.resetExposure();
       },
 
       detectCapabilities() {
@@ -648,6 +683,19 @@ void main() {
         }
       },
 
+      onCameraSelectChange() {
+        const idx = parseInt(this.camSelect.value);
+        if (idx !== this.cameraIndex) this.switchCamera(idx);
+      },
+
+      disableET() {
+        this.etOn = false;
+        this.btnET.classList.remove('on');
+        this.etRow.style.display = 'none';
+        this.manualET = null;
+        void this.resetExposure();
+      },
+
       /** ISO applied with manual ET when the camera supports it; matches S22 calibration. */
       FIXED_ISO: 400,
 
@@ -727,55 +775,6 @@ void main() {
         this.grayMode = this.grayModeSelect.value;
       },
 
-      onLanguageChange() {
-        const v = this.langSelect.value;
-        try {
-          if (v === 'auto') {
-            localStorage.removeItem(LOCALE_STORAGE_KEY);
-          } else {
-            localStorage.setItem(LOCALE_STORAGE_KEY, v);
-          }
-        } catch (e) { /* private mode */ }
-        this.applyLocale();
-      },
-
-      applyLocale() {
-        const effective = getEffectiveLocale();
-        this.locale = effective;
-        this.strings = I18N[effective] || I18N.en;
-        const t = this.strings;
-        document.documentElement.lang = effective === 'cs' ? 'cs' : 'en';
-        document.title = t.title;
-        this.btnGray.textContent = t.grayscale;
-        this.btnGray.title = t.grayscaleTitle;
-        this.btnBlur.textContent = t.blur;
-        this.btnET.textContent = t.brightLight;
-        this.btnET.title = t.brightLightTitle;
-        this.btnSettings.title = t.settingsTitle;
-        document.getElementById('label-glare').textContent = t.glare;
-        document.getElementById('label-strength').textContent = t.strength;
-        document.getElementById('label-gray-type').textContent = t.grayType;
-        document.getElementById('label-language').textContent = t.langLabel;
-        document.getElementById('label-camera').textContent = t.camera;
-        document.getElementById('label-sharpness').textContent = t.sharpness;
-        document.getElementById('label-shutter').textContent = t.shutter;
-        const optS = this.grayModeSelect.querySelector('option[value="scotopic"]');
-        const optR = this.grayModeSelect.querySelector('option[value="rec601"]');
-        if (optS) optS.textContent = t.grayScience;
-        if (optR) optR.textContent = t.grayPlain;
-        const optAuto = this.langSelect.querySelector('option[value="auto"]');
-        const optEn   = this.langSelect.querySelector('option[value="en"]');
-        const optCs   = this.langSelect.querySelector('option[value="cs"]');
-        if (optAuto) optAuto.textContent = t.langAuto;
-        if (optEn)   optEn.textContent = t.langEn;
-        if (optCs)   optCs.textContent = t.langCs;
-        this.langSelect.value = readLocaleOverride() || 'auto';
-        this.btnSig.textContent = this.sigmoidOn ? t.glareOn : t.glareOff;
-        if (this.errorDiv.style.display === 'block' && this._lastErrorKey) {
-          this.showError(this._lastErrorKey, ...(this._lastErrorParams || []));
-        }
-      },
-
       toggleSigmoid() {
         this.sigmoidOn = !this.sigmoidOn;
         this.btnSig.classList.toggle('on', this.sigmoidOn);
@@ -823,52 +822,53 @@ void main() {
         this.btnSettings.classList.toggle('on', this.settingsOpen);
       },
 
-      onCameraSelectChange() {
-        const idx = parseInt(this.camSelect.value);
-        if (idx !== this.cameraIndex) this.switchCamera(idx);
+      onLanguageChange() {
+        const v = this.langSelect.value;
+        try {
+          if (v === 'auto') {
+            localStorage.removeItem(LOCALE_STORAGE_KEY);
+          } else {
+            localStorage.setItem(LOCALE_STORAGE_KEY, v);
+          }
+        } catch (e) { /* private mode */ }
+        this.applyLocale();
       },
 
-      updateCanvasSize() {
-        const vw = this.video.videoWidth;
-        const vh = this.video.videoHeight;
-        if (!vw || !vh) return;
-        this.canvas.width = vw;
-        this.canvas.height = vh;
-        if (this.gl) this.gl.viewport(0, 0, vw, vh);
-        if (this.useCanvasWorkaround && this.texSourceCanvas) {
-          this.texSourceCanvas.width = vw;
-          this.texSourceCanvas.height = vh;
+      applyLocale() {
+        const effective = getEffectiveLocale();
+        this.locale = effective;
+        this.strings = I18N[effective] || I18N.en;
+        const t = this.strings;
+        document.documentElement.lang = effective === 'cs' ? 'cs' : 'en';
+        document.title = t.title;
+        this.btnGray.textContent = t.grayscale;
+        this.btnGray.title = t.grayscaleTitle;
+        this.btnBlur.textContent = t.blur;
+        this.btnET.textContent = t.brightLight;
+        this.btnET.title = t.brightLightTitle;
+        this.btnSettings.title = t.settingsTitle;
+        document.getElementById('label-glare').textContent = t.glare;
+        document.getElementById('label-strength').textContent = t.strength;
+        document.getElementById('label-gray-type').textContent = t.grayType;
+        document.getElementById('label-language').textContent = t.langLabel;
+        document.getElementById('label-camera').textContent = t.camera;
+        document.getElementById('label-sharpness').textContent = t.sharpness;
+        document.getElementById('label-shutter').textContent = t.shutter;
+        const optS = this.grayModeSelect.querySelector('option[value="scotopic"]');
+        const optR = this.grayModeSelect.querySelector('option[value="rec601"]');
+        if (optS) optS.textContent = t.grayScience;
+        if (optR) optR.textContent = t.grayPlain;
+        const optAuto = this.langSelect.querySelector('option[value="auto"]');
+        const optEn   = this.langSelect.querySelector('option[value="en"]');
+        const optCs   = this.langSelect.querySelector('option[value="cs"]');
+        if (optAuto) optAuto.textContent = t.langAuto;
+        if (optEn)   optEn.textContent = t.langEn;
+        if (optCs)   optCs.textContent = t.langCs;
+        this.langSelect.value = readLocaleOverride() || 'auto';
+        this.btnSig.textContent = this.sigmoidOn ? t.glareOn : t.glareOff;
+        if (this.errorDiv.style.display === 'block' && this._lastErrorKey) {
+          this.showError(this._lastErrorKey, ...(this._lastErrorParams || []));
         }
-      },
-
-      uploadVideoTexture() {
-        const gl = this.gl;
-        gl.bindTexture(gl.TEXTURE_2D, this.glTexture);
-        if (this.useCanvasWorkaround) {
-          const w = this.video.videoWidth;
-          const h = this.video.videoHeight;
-          this.texSourceCtx.drawImage(this.video, 0, 0, w, h);
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.texSourceCanvas);
-        } else {
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.video);
-        }
-      },
-
-      processFrame() {
-        const gl = this.gl;
-        if (!gl || gl.isContextLost()) return;
-
-        this.uploadVideoTexture();
-
-        const u = this.glUniforms;
-        gl.uniform1i(u.uGrayscale, this.grayscaleOn ? 1 : 0);
-        gl.uniform1i(u.uGrayMode, this.grayMode === 'scotopic' ? 0 : 1);
-        gl.uniform1i(u.uSigmoid, this.sigmoidOn ? 1 : 0);
-        gl.uniform1f(u.uSigmoidMid, this.sigmoidMidpoint);
-
-        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-
-        this.rafId = requestAnimationFrame(() => this.processFrame());
       },
 
       showError(msgKey, ...params) {
