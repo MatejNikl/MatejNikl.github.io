@@ -156,7 +156,7 @@
       </select>
     </div>
     <div id="et-row" class="settings-row" style="display:none">
-      <label id="label-shutter">Shutter</label>
+      <label id="label-shutter">Shutter <span id="et-auto" style="font-weight:400;opacity:0.6;font-size:10px">(auto)</span></label>
       <input type="range" id="et-slider" min="1" max="100" value="1">
       <span id="et-val" class="val">--</span>
     </div>
@@ -218,6 +218,29 @@ void main() {
     gl_FragColor = color;
 }`;
 
+    const DS_FRAG_SRC = `
+precision mediump float;
+uniform sampler2D uSrc;
+uniform vec2 uSrcSize;
+void main() {
+    vec2 cellSize = vec2(16.0, 16.0);
+    vec2 base = floor(gl_FragCoord.xy) * cellSize;
+    float total = 0.0;
+    float count = 0.0;
+    for (int y = 0; y < 16; y++) {
+        for (int x = 0; x < 16; x++) {
+            vec2 px = base + vec2(float(x), float(y)) + 0.5;
+            if (px.x < uSrcSize.x && px.y < uSrcSize.y) {
+                vec4 c = texture2D(uSrc, px / uSrcSize);
+                total += dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
+                count += 1.0;
+            }
+        }
+    }
+    float avg = total / max(count, 1.0);
+    gl_FragColor = vec4(avg, avg, avg, 1.0);
+}`;
+
     const I18N = {
       en: {
         title: 'Achromatopsia Simulator',
@@ -233,6 +256,7 @@ void main() {
         camera: 'Camera',
         sharpness: 'Sharpness',
         shutter: 'Shutter',
+        shutterAuto: '(auto)',
         errWebGL: 'WebGL not supported. Try Chrome or Safari.',
         errCameraUnsupported: 'Camera access not supported. Try Chrome or Safari.',
         errCameraFailed: 'Camera failed: {0}',
@@ -256,6 +280,7 @@ void main() {
         camera: 'Kamera',
         sharpness: 'Ostrost',
         shutter: 'Závěrka',
+        shutterAuto: '(auto)',
         errWebGL: 'WebGL není podporován. Zkuste Chrome nebo Safari.',
         errCameraUnsupported: 'Přístup ke kameře není podporován. Zkuste Chrome nebo Safari.',
         errCameraFailed: 'Kamera selhala: {0}',
@@ -313,6 +338,7 @@ void main() {
       camRow: document.getElementById('cam-row'),
       camSelect: document.getElementById('cam-select'),
       langSelect: document.getElementById('lang-select'),
+      etAutoSpan: document.getElementById('et-auto'),
       stream: null,
       track: null,
       rafId: null,
@@ -339,6 +365,17 @@ void main() {
       cameraIndex: -1,
       locale: 'en',
       strings: I18N.en,
+      dsProgram: null,
+      dsAPos: -1,
+      dsUniforms: null,
+      dsChain: [],
+      meterFrameCounter: 0,
+      METER_EVERY_N: 10,
+      AE_TARGET: 0.35,
+      AE_DAMPING: 0.15,
+      AE_DEADBAND: 0.05,
+      autoET: true,
+      _etApplyPending: false,
 
       initGL() {
         const gl = this.canvas.getContext('webgl', { antialias: false, depth: false, stencil: false });
@@ -396,6 +433,8 @@ void main() {
 
         gl.uniform1i(this.glUniforms.uVideo, 0);
 
+        this.initDownsamplePipeline(gl);
+
         if (!this._glLifecycleBound) {
           this._glLifecycleBound = true;
           this.canvas.addEventListener('webglcontextlost', (e) => {
@@ -413,6 +452,62 @@ void main() {
         }
 
         return true;
+      },
+
+      initDownsamplePipeline(gl) {
+        const vs = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(vs, VERT_SRC);
+        gl.compileShader(vs);
+        const fs = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(fs, DS_FRAG_SRC);
+        gl.compileShader(fs);
+        if (!gl.getShaderParameter(fs, gl.COMPILE_STATUS)) {
+          console.error('Downsample shader:', gl.getShaderInfoLog(fs));
+          return;
+        }
+        const prog = gl.createProgram();
+        gl.attachShader(prog, vs);
+        gl.attachShader(prog, fs);
+        gl.linkProgram(prog);
+        if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+          console.error('Downsample program link:', gl.getProgramInfoLog(prog));
+          return;
+        }
+        this.dsProgram = prog;
+        this.dsAPos = gl.getAttribLocation(prog, 'aPos');
+        this.dsUniforms = {
+          uSrc: gl.getUniformLocation(prog, 'uSrc'),
+          uSrcSize: gl.getUniformLocation(prog, 'uSrcSize'),
+        };
+      },
+
+      buildDSChain(w, h) {
+        const gl = this.gl;
+        if (!gl || !this.dsProgram) return;
+        this.dsChain.forEach(level => {
+          gl.deleteTexture(level.tex);
+          gl.deleteFramebuffer(level.fbo);
+        });
+        this.dsChain = [];
+        let sw = w, sh = h;
+        while (sw > 1 || sh > 1) {
+          const dw = Math.max(1, Math.ceil(sw / 16));
+          const dh = Math.max(1, Math.ceil(sh / 16));
+          const tex = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, tex);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, dw, dh, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+          const fbo = gl.createFramebuffer();
+          gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+          gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+          this.dsChain.push({ tex, fbo, w: dw, h: dh, srcW: sw, srcH: sh });
+          sw = dw;
+          sh = dh;
+        }
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       },
 
       resetVideoTextureWorkaround() {
@@ -451,6 +546,7 @@ void main() {
           this.texSourceCanvas.width = vw;
           this.texSourceCanvas.height = vh;
         }
+        this.buildDSChain(vw, vh);
       },
 
       uploadVideoTexture() {
@@ -466,6 +562,40 @@ void main() {
         }
       },
 
+      meterLuminance() {
+        const gl = this.gl;
+        if (!this.dsProgram || !this.dsChain.length) return -1;
+        const savedProg = gl.getParameter(gl.CURRENT_PROGRAM);
+        gl.useProgram(this.dsProgram);
+        gl.enableVertexAttribArray(this.dsAPos);
+        gl.vertexAttribPointer(this.dsAPos, 2, gl.FLOAT, false, 0, 0);
+        gl.uniform1i(this.dsUniforms.uSrc, 0);
+
+        let srcTex = this.glTexture;
+        for (let i = 0; i < this.dsChain.length; i++) {
+          const level = this.dsChain[i];
+          gl.bindFramebuffer(gl.FRAMEBUFFER, level.fbo);
+          gl.viewport(0, 0, level.w, level.h);
+          gl.bindTexture(gl.TEXTURE_2D, srcTex);
+          gl.uniform2f(this.dsUniforms.uSrcSize, level.srcW, level.srcH);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          srcTex = level.tex;
+        }
+
+        const px = new Uint8Array(4);
+        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        const vw = this.canvas.width, vh = this.canvas.height;
+        if (vw && vh) gl.viewport(0, 0, vw, vh);
+        gl.useProgram(savedProg);
+        const mainAPos = gl.getAttribLocation(this.glProgram, 'aPos');
+        gl.enableVertexAttribArray(mainAPos);
+        gl.vertexAttribPointer(mainAPos, 2, gl.FLOAT, false, 0, 0);
+
+        return px[0] / 255;
+      },
+
       processFrame() {
         const gl = this.gl;
         if (!gl || gl.isContextLost()) return;
@@ -477,6 +607,14 @@ void main() {
         gl.uniform1i(u.uGrayMode, this.grayMode === 'scotopic' ? 0 : 1);
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+        if (this.etOn && this.autoET && this.supportsET) {
+          if (++this.meterFrameCounter >= this.METER_EVERY_N) {
+            this.meterFrameCounter = 0;
+            const lum = this.meterLuminance();
+            if (lum >= 0) this.autoAdjustET(lum);
+          }
+        }
 
         this.rafId = requestAnimationFrame(() => this.processFrame());
       },
@@ -557,6 +695,7 @@ void main() {
           if (this.etOn) {
             this.btnET.classList.add('on');
             this.etRow.style.display = 'flex';
+            this.updateAutoIndicator();
           }
         } else if (this.etOn) {
           this.disableET();
@@ -696,6 +835,47 @@ void main() {
         }
       },
 
+      autoAdjustET(measured) {
+        if (!this.caps?.exposureTime || this._etApplyPending) return;
+        const { min, max } = this.caps.exposureTime;
+        const etFloor = Math.max(min, this.getETFloor());
+        const currentET = this.manualET || etFloor;
+        const ratio = this.AE_TARGET / Math.max(measured, 0.001);
+        const logCurrent = Math.log(currentET);
+        const logTarget = Math.log(Math.max(etFloor, Math.min(max, currentET * ratio)));
+        const logNew = logCurrent + this.AE_DAMPING * (logTarget - logCurrent);
+        const newET = Math.max(etFloor, Math.min(max, Math.round(Math.exp(logNew))));
+        const change = Math.abs(newET - currentET) / Math.max(currentET, 1);
+        if (change < this.AE_DEADBAND) return;
+        this.manualET = newET;
+        this.etVal.textContent = newET + '\xB5s';
+        this.syncSliderToET(newET);
+        this._etApplyPending = true;
+        const constraint = { exposureMode: 'manual', exposureTime: newET };
+        if (this.supportsISO) constraint.iso = this.getFixedISO();
+        this.track.applyConstraints({ advanced: [constraint] })
+          .catch(e => console.warn('Auto ET failed:', e))
+          .finally(() => { this._etApplyPending = false; });
+      },
+
+      syncSliderToET(et) {
+        if (!this.caps?.exposureTime) return;
+        const { min, max } = this.caps.exposureTime;
+        const etFloor = this.getETFloor();
+        const effectiveMin = Math.min(Math.max(min, etFloor), max);
+        const logMin = Math.log(effectiveMin);
+        const logMax = Math.log(max);
+        if (logMax <= logMin) { this.etSlider.value = 1; return; }
+        const t = (Math.log(Math.max(effectiveMin, Math.min(max, et))) - logMin) / (logMax - logMin);
+        this.etSlider.value = Math.round(1 + t * 99);
+      },
+
+      updateAutoIndicator() {
+        if (this.etAutoSpan) {
+          this.etAutoSpan.style.display = (this.etOn && this.autoET) ? '' : 'none';
+        }
+      },
+
       async resetExposure() {
         this.manualET = null;
         if (!this.track?.getCapabilities) return;
@@ -713,10 +893,15 @@ void main() {
         this.etOn = !this.etOn;
         this.btnET.classList.toggle('on', this.etOn);
         if (this.etOn) {
+          this.autoET = true;
+          this.meterFrameCounter = 0;
           this.etRow.style.display = 'flex';
+          this.updateAutoIndicator();
           await this.applyET();
         } else {
+          this.autoET = false;
           this.etRow.style.display = 'none';
+          this.updateAutoIndicator();
           await this.resetExposure();
         }
       },
@@ -793,7 +978,8 @@ void main() {
         document.getElementById('label-language').textContent = t.langLabel;
         document.getElementById('label-camera').textContent = t.camera;
         document.getElementById('label-sharpness').textContent = t.sharpness;
-        document.getElementById('label-shutter').textContent = t.shutter;
+        document.getElementById('label-shutter').childNodes[0].textContent = t.shutter + ' ';
+        if (this.etAutoSpan) this.etAutoSpan.textContent = t.shutterAuto;
         const optS = this.grayModeSelect.querySelector('option[value="scotopic"]');
         const optR = this.grayModeSelect.querySelector('option[value="rec601"]');
         if (optS) optS.textContent = t.grayScience;
@@ -839,7 +1025,11 @@ void main() {
     sim.btnBlur.addEventListener('click', () => sim.toggleBlur());
     sim.btnSettings.addEventListener('click', () => sim.toggleSettings());
     sim.camSelect.addEventListener('change', () => sim.onCameraSelectChange());
-    sim.etSlider.addEventListener('input', () => sim.applyET());
+    sim.etSlider.addEventListener('input', () => {
+      sim.autoET = false;
+      sim.updateAutoIndicator();
+      sim.applyET();
+    });
     sim.blurSlider.addEventListener('input', () => sim.onBlurChange());
     sim.grayModeSelect.addEventListener('change', () => sim.onGrayModeChange());
     sim.langSelect.addEventListener('change', () => sim.onLanguageChange());

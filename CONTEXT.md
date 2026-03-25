@@ -20,11 +20,13 @@ Controls are anchored top-right unless noted.
   the bottom (still driven by visual acuity internally, e.g. 0.10 ≈ 20/200 — higher
   value means sharper / less blur).
 - **Glare**: Shown only when `getCapabilities()` reports `exposureMode`
-  including `manual` and an `exposureTime` range. **On by default** at the
-  shortest ET (the ET floor, ~250 µs), which is enough to show realistic glare
-  in normally-lit and bright conditions. Toggles manual exposure mode; if the
-  camera exposes `iso` in capabilities, **ISO is fixed at 400** (clamped to
-  the hardware min/max) on every `applyConstraints` call — there is no ISO slider.
+  including `manual` and an `exposureTime` range. **On by default** with
+  **software auto-exposure** enabled — the app measures average frame brightness
+  on the GPU and adjusts the manual ET to keep dark scenes properly exposed
+  while preserving glare in bright conditions. Toggles manual exposure mode;
+  if the camera exposes `iso` in capabilities, **ISO is fixed at 400** (clamped
+  to the hardware min/max) on every `applyConstraints` call — there is no ISO
+  slider.
 - **Settings** (gear): Opens a panel below the gear with:
   - **Grayscale type**: Dropdown — **Science-based** (scotopic / rod-weighted
     luminance in the shader) vs **Plain B&W** (Rec. 601) when grayscale is on.
@@ -32,6 +34,8 @@ Controls are anchored top-right unless noted.
     **Language** paragraph above).
   - **Shutter**: Logarithmic ET slider, shown when Glare is on. Adjusts the
     manual exposure time from the ET floor (~250 µs) up to the camera's maximum.
+    When auto-exposure is active, the slider tracks the auto-computed ET and
+    a small "(auto)" label appears; touching the slider disables auto-exposure.
   - **Camera**: Dropdown listing rear cameras, only when more than one was
     detected after enumeration.
 
@@ -199,10 +203,12 @@ Manual exposure time via `MediaStreamTrack.applyConstraints`,
 with **ISO held fixed at 400** when the camera supports setting `iso` (clamped
 to `[iso.min, iso.max]` so odd hardware ranges still work). The **Glare**
 pill is hidden until `getCapabilities()` reports `exposureMode` including
-`manual` and a defined `exposureTime` range. It is **on by default** at the
-shortest ET (the ET floor), so the simulator shows realistic glare out of the
-box in normally-lit environments. A logarithmic **Shutter** slider in
-**Settings** lets the user increase the ET for more wash-out.
+`manual` and a defined `exposureTime` range. It is **on by default** with
+**software auto-exposure** active, starting from the shortest ET (the ET
+floor) and adapting upward in dim lighting (see subsection below). A
+logarithmic **Shutter** slider in **Settings** lets the user override the
+auto-computed ET for more wash-out; touching the slider disables
+auto-exposure.
 
 **Why fixed ISO 400:** It matches the empirical calibration on the Samsung S22
 (f/1.8) used to derive `C_emp ≈ 30.86`. It is a sensible mid-gain default for
@@ -243,6 +249,51 @@ calibration curve (the device's actual gain is then whatever the ISP applies).
 
 ET is clamped to hardware min/max; if `ET_floor` exceeds the hardware maximum,
 the slider range collapses toward the long-exposure end as a safety net.
+
+### Software auto-exposure metering loop
+
+With the camera fully in manual mode, a fixed ET at the floor (~250 µs) makes
+bright scenes wash out correctly but leaves dark rooms severely underexposed.
+Reading the camera's actual exposure via `getSettings()` is unreliable (see
+"Attempt 2 / Strategy B" above), so the app implements its own auto-exposure
+controller by measuring average frame brightness on the GPU.
+
+**Metering pipeline (GPU-side):** After the main render pass, every 10th frame
+the raw camera texture (before grayscale conversion) is downsampled through a
+chain of framebuffer objects (FBOs). A dedicated GLSL shader averages 16×16
+pixel cells per pass, so a
+1920×1080 frame reaches 1×1 in ~3 passes (`ceil(1920/16) = 120`, then
+`ceil(120/16) = 8`, then `ceil(8/16) = 1`). The final 1×1 pixel is read back
+with `gl.readPixels()` — reading a single pixel keeps the GPU pipeline stall
+negligible (~1–2 ms). Luminance uses photopic weights
+(`0.2126 R + 0.7152 G + 0.0722 B`) since this is metering, not the
+achromatopsia simulation.
+
+**Feedback controller:** A proportional controller in log-space compares the
+measured average brightness against a target (0.35, roughly mid-gray in
+gamma-encoded space). The new ET is computed as:
+
+```
+ratio     = target / measured
+logNew    = logCurrent + damping × (log(clamp(current × ratio)) - logCurrent)
+newET     = clamp(round(exp(logNew)), etFloor, etMax)
+```
+
+Log-space interpolation matches the logarithmic nature of exposure (each
+doubling of ET doubles brightness). The damping factor (0.15) smooths
+convergence to ~1–2 seconds at the ~3 Hz metering rate, preventing flicker.
+A dead-band of 5% relative change avoids redundant `applyConstraints` calls.
+
+**Interaction with the Shutter slider:** Auto-exposure is **on by default**
+whenever Glare is enabled. If the user manually moves the Shutter slider,
+auto-exposure is disabled and the slider value is used directly. Toggling
+Glare off and back on re-enables auto-exposure. A small "(auto)" label next
+to the Shutter label indicates when the loop is active.
+
+**Clamping preserves glare:** The ET floor remains the lower bound. In bright
+scenes the controller settles at or near the floor, producing the same
+wash-out as the original fixed-ET approach. The loop only raises ET above the
+floor in dim scenes, preventing underexposure.
 
 ## Known issues
 
