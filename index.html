@@ -878,7 +878,7 @@ void main() {
         for (let i = 0; i < params.length; i++) {
           fmt = fmt.split('{' + i + '}').join(String(params[i]));
         }
-        this._lastErrorKey = known ? msgKey : null;
+        this._lastErrorKey = msgKey;
         this._lastErrorParams = params;
         this.errorDiv.textContent = fmt;
         this.errorDiv.style.display = 'block';
