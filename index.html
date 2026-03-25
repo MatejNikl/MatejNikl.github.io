@@ -578,18 +578,20 @@ void main() {
         });
       },
 
+      disableET() {
+        this.etOn = false;
+        this.btnET.classList.remove('on');
+        this.etRow.style.display = 'none';
+        this.manualET = null;
+        void this.resetExposure();
+      },
+
       detectCapabilities() {
         this.btnET.classList.add('hidden');
         this.supportsET = false;
         this.supportsISO = false;
         if (!this.track?.getCapabilities) {
-          if (this.etOn) {
-            this.etOn = false;
-            this.btnET.classList.remove('on');
-            this.etRow.style.display = 'none';
-            this.manualET = null;
-            void this.resetExposure();
-          }
+          if (this.etOn) this.disableET();
           return;
         }
         this.caps = this.track.getCapabilities();
@@ -604,11 +606,7 @@ void main() {
         if (this.supportsET) {
           this.btnET.classList.remove('hidden');
         } else if (this.etOn) {
-          this.etOn = false;
-          this.btnET.classList.remove('on');
-          this.etRow.style.display = 'none';
-          this.manualET = null;
-          void this.resetExposure();
+          this.disableET();
         }
 
         this.aperture = 1.8;
