@@ -6,7 +6,7 @@ approximately what a person with complete achromatopsia (rod monochromacy) sees.
 ## User interface
 
 **Language:** Under **Settings → Language**, the user can choose **System default**
-(follow the browser’s preferred languages), **English**, or **Czech**. **System
+(follow the browser's preferred languages), **English**, or **Czech**. **System
 default** uses the same rule as before: if `navigator.languages` / `navigator.language`
 includes any tag whose primary subtag is `cs`, the UI is Czech; otherwise English.
 A choice of English or Czech is stored in `localStorage` under the key
@@ -19,14 +19,12 @@ Controls are anchored top-right unless noted.
 - **Blur**: Toggles the acuity simulation. When on, a **Sharpness** slider appears at
   the bottom (still driven by visual acuity internally, e.g. 0.10 ≈ 20/200 — higher
   value means sharper / less blur).
-- **Bright light**: Shown only when `getCapabilities()` reports `exposureMode`
+- **Glare**: Shown only when `getCapabilities()` reports `exposureMode`
   including `manual` and an `exposureTime` range. Toggles manual exposure mode;
   when on, a logarithmic **Shutter** (exposure time) slider appears at the bottom. If
   the camera exposes `iso` in capabilities, **ISO is fixed at 400** (clamped to
   the hardware min/max) on every `applyConstraints` call — there is no ISO slider.
 - **Settings** (gear): Opens a panel below the gear with:
-  - **Glare**: Sigmoid photophobia simulation on/off; when on, a **Strength**
-    slider adjusts the sigmoid midpoint.
   - **Grayscale type**: Dropdown — **Science-based** (scotopic / rod-weighted
     luminance in the shader) vs **Plain B&W** (Rec. 601) when grayscale is on.
   - **Language**: Dropdown — **System default**, **English**, or **Czech** (see
@@ -81,14 +79,10 @@ auto-exposure concept is physiologically sound but technically infeasible with
 current web APIs on most Android devices.
 
 What *does* work is `applyConstraints({ exposureMode: 'manual', exposureTime: X })`
-— setting an explicit manual ET value. The **Bright light** control does this via a
-direct manual shutter (ET) slider. It cannot emulate the gradual rod saturation curve, but
-it lets the user force the camera to over-expose, which is useful for
+— setting an explicit manual ET value. The **Glare** control does this via a
+direct manual shutter (ET) slider. It cannot emulate the gradual rod saturation
+curve, but it lets the user force the camera to over-expose, which is useful for
 demonstrating what happens in bright light.
-
-The sigmoid wash-out (**Glare** in Settings) was added as a software fallback for
-photophobia simulation — it is device-independent and always works, though it
-operates on pixel brightness rather than actual scene illuminance.
 
 ## Scotopic grayscale conversion
 
@@ -196,65 +190,62 @@ another camera via **Settings → Camera** can also unfreeze the stream as a sid
 effect. Explicit `video.play()` calls after setting `srcObject` ensure playback
 starts across all browsers.
 
-## Other effects
+## Glare (photophobia via manual exposure)
 
-- **Glare** (Settings): Sigmoid wash-out simulating photophobia / light
-  sensitivity. Applies `1/(1+exp(-12*(t-mid)))` blend toward white. Adjustable
-  midpoint via the **Strength** slider when Glare is on.
-- **Bright light** (top bar): Manual exposure time via `MediaStreamTrack.applyConstraints`,
-  with **ISO held fixed at 400** when the camera supports setting `iso` (clamped
-  to `[iso.min, iso.max]` so odd hardware ranges still work). The **Bright light**
-  pill is hidden until `getCapabilities()` reports `exposureMode` including
-  `manual` and a defined `exposureTime` range. When it is toggled on, a
-  logarithmic **Shutter** (ET) slider appears at the bottom.
+Manual exposure time via `MediaStreamTrack.applyConstraints`,
+with **ISO held fixed at 400** when the camera supports setting `iso` (clamped
+to `[iso.min, iso.max]` so odd hardware ranges still work). The **Glare**
+pill is hidden until `getCapabilities()` reports `exposureMode` including
+`manual` and a defined `exposureTime` range. When it is toggled on, a
+logarithmic **Shutter** (ET) slider appears at the bottom.
 
-  **Why fixed ISO 400:** It matches the empirical calibration on the Samsung S22
-  (f/1.8) used to derive `C_emp ≈ 30.86`. It is a sensible mid-gain default for
-  phone cameras — not universal, but stable and easy to reason about.
-  **Semi-automatic ISO** (manual shutter while the ISP freely adjusts gain) is not
-  relied on: hybrid constraint behavior is inconsistent across devices, and
-  reading real-time ISO from `getSettings()` is unreliable on many Android
-  browsers (often dummy values), so the app does not try to track or follow auto
-  ISO in software.
+**Why fixed ISO 400:** It matches the empirical calibration on the Samsung S22
+(f/1.8) used to derive `C_emp ≈ 30.86`. It is a sensible mid-gain default for
+phone cameras — not universal, but stable and easy to reason about.
+**Semi-automatic ISO** (manual shutter while the ISP freely adjusts gain) is not
+relied on: hybrid constraint behavior is inconsistent across devices, and
+reading real-time ISO from `getSettings()` is unreliable on many Android
+browsers (often dummy values), so the app does not try to track or follow auto
+ISO in software.
 
-  The **Shutter** slider’s minimum is an **ET floor** derived so that, at the fixed
-  ISO above, lengthening exposure from that point loosely aligns with “wash-out
-  territory” around **~1000 lux** — the illuminance at which rod saturation
-  overwhelms an achromat’s vision in the model.
+The **Shutter** slider's minimum is an **ET floor** derived so that, at the fixed
+ISO above, lengthening exposure from that point loosely aligns with "wash-out
+territory" around **~1000 lux** — the illuminance at which rod saturation
+overwhelms an achromat's vision in the model.
 
-  The floor uses the incident-light exposure formula `t = N² × C / (E × S)`,
-  rearranged with fixed `E_overwhelm = 1000` and `S =` fixed ISO:
+The floor uses the incident-light exposure formula `t = N² × C / (E × S)`,
+rearranged with fixed `E_overwhelm = 1000` and `S =` fixed ISO:
 
-  ```
-  ET_floor [µs] = N² × C_emp × 1e6 / (E_overwhelm × ISO)
-  ```
+```
+ET_floor [µs] = N² × C_emp × 1e6 / (E_overwhelm × ISO)
+```
 
-  The standard calibration constant is `C = 250`, but phone camera ISP pipelines
-  (tone mapping, auto-gain) make the image brighter than a raw sensor reading.
-  Empirical testing on the Samsung S22 showed that ISO 400 + 250 µs already
-  produces overwhelm at ~1000 lux, whereas the standard formula predicts ~2025 µs.
-  Solving backwards gives `C_emp ≈ 30.86`.
+The standard calibration constant is `C = 250`, but phone camera ISP pipelines
+(tone mapping, auto-gain) make the image brighter than a raw sensor reading.
+Empirical testing on the Samsung S22 showed that ISO 400 + 250 µs already
+produces overwhelm at ~1000 lux, whereas the standard formula predicts ~2025 µs.
+Solving backwards gives `C_emp ≈ 30.86`.
 
-  The aperture `N` is hardcoded at 1.8 (typical main camera on modern phones).
-  The Web API does not expose f-number, so per-lens adjustment is not possible.
-  On multi-camera phones the telephoto may have f/2.4, which would shift the ET
-  floor — but since we can't detect it, the calibration is slightly off for
-  non-primary lenses.
+The aperture `N` is hardcoded at 1.8 (typical main camera on modern phones).
+The Web API does not expose f-number, so per-lens adjustment is not possible.
+On multi-camera phones the telephoto may have f/2.4, which would shift the ET
+floor — but since we can't detect it, the calibration is slightly off for
+non-primary lenses.
 
-  If the camera does not expose `iso` in capabilities, constraints send only
-  `exposureTime`; the ET floor math still assumes **ISO 400** for the same
-  calibration curve (the device’s actual gain is then whatever the ISP applies).
+If the camera does not expose `iso` in capabilities, constraints send only
+`exposureTime`; the ET floor math still assumes **ISO 400** for the same
+calibration curve (the device's actual gain is then whatever the ISP applies).
 
-  ET is clamped to hardware min/max; if `ET_floor` exceeds the hardware maximum,
-  the slider range collapses toward the long-exposure end as a safety net.
+ET is clamped to hardware min/max; if `ET_floor` exceeds the hardware maximum,
+the slider range collapses toward the long-exposure end as a safety net.
 
 ## Known issues
 
-- **Manual exposure (Bright light pill) is effectively Android Chrome only.** The
+- **Manual exposure (Glare pill) is effectively Android Chrome only.** The
   `exposureTime` and `iso` capabilities in `MediaStreamTrack.getCapabilities()`
   are part of the W3C mediacapture-image spec but only implemented in Chrome on
   Android (since Chrome 72). iOS Safari does not support them — all iOS browsers
-  use WebKit, which has no `exposureTime` or `iso` implementation. The Bright light
+  use WebKit, which has no `exposureTime` or `iso` implementation. The Glare
   control stays hidden on iOS because capability detection does not find manual
   `exposureTime`. There is no web API workaround for manual shutter speed on iOS.
 - iOS Safari (not Chrome) may still show a frozen first frame on initial load.
