@@ -1039,6 +1039,36 @@ void main() {
       resizeTimeout = setTimeout(() => sim.updateCanvasSize(), 100);
     });
     window.addEventListener('unload', () => sim.cleanup());
+
+    document.addEventListener('visibilitychange', async () => {
+      if (document.hidden) {
+        if (sim.rafId) { cancelAnimationFrame(sim.rafId); sim.rafId = null; }
+        if (sim.stream) {
+          sim.stream.getTracks().forEach(t => t.stop());
+          sim.stream = null;
+          sim.track = null;
+          sim.video.srcObject = null;
+        }
+      } else {
+        if (sim.stream || sim.rafId) return;
+        try {
+          const deviceId = sim.cameras[sim.cameraIndex]?.deviceId;
+          const videoConstraints = deviceId
+            ? { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+            : { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } };
+          const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
+          if (document.hidden) {
+            stream.getTracks().forEach(t => t.stop());
+            return;
+          }
+          await sim.attachAndPrepareStream(stream);
+          sim.processFrame();
+        } catch (err) {
+          sim.showError('errCameraFailed', err.message);
+        }
+      }
+    });
+
     sim.start();
   </script>
 </body>
