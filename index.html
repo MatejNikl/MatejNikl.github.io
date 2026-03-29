@@ -377,6 +377,7 @@ void main() {
       settingsOpen: false,
       cameras: [],
       cameraIndex: -1,
+      _preferredCameraDeviceId: null,
       locale: 'en',
       strings: I18N.en,
       dsProgram: null,
@@ -717,8 +718,8 @@ void main() {
 
         if (this.supportsET) {
           this.btnET.classList.remove('hidden');
+          this.btnET.classList.toggle('on', this.etOn);
           if (this.etOn) {
-            this.btnET.classList.add('on');
             this.etRow.style.display = 'flex';
             this.updateAutoIndicator();
           }
@@ -757,7 +758,12 @@ void main() {
         this.cameraIndex = this.cameras.findIndex(c => c.deviceId === currentId);
         if (this.cameraIndex === -1) this.cameraIndex = 0;
 
-        if (this.cameraIndex !== 0) await this.switchCamera(0);
+        let targetIndex = 0;
+        if (this._preferredCameraDeviceId) {
+          const prefIdx = this.cameras.findIndex(c => c.deviceId === this._preferredCameraDeviceId);
+          if (prefIdx !== -1) targetIndex = prefIdx;
+        }
+        if (this.cameraIndex !== targetIndex) await this.switchCamera(targetIndex);
 
         if (this.cameras.length > 1) {
           this.camRow.style.display = 'flex';
@@ -795,6 +801,7 @@ void main() {
             });
             await this.attachAndPrepareStream(stream);
             this.camSelect.value = this.cameraIndex;
+            this.persistPrefs();
             return;
           } catch (err) {
             if (attempt === 2) this.showError('errSwitchFailed', err.message);
@@ -928,15 +935,20 @@ void main() {
           this.updateAutoIndicator();
           await this.resetExposure();
         }
+        this.persistPrefs();
       },
 
       persistPrefs() {
-        savePrefs({
+        const prefs = {
           grayscaleOn: this.grayscaleOn,
           grayMode: this.grayMode,
           blurOn: this.blurOn,
           blurVA: this.blurVA,
-        });
+          etOn: this.etOn,
+        };
+        const camDevice = this.cameras[this.cameraIndex];
+        if (camDevice) prefs.cameraDeviceId = camDevice.deviceId;
+        savePrefs(prefs);
       },
 
       restorePrefs() {
@@ -959,6 +971,12 @@ void main() {
           this.blurVA = p.blurVA;
           this.blurSlider.value = Math.round(p.blurVA * 1000);
           this.blurVal.textContent = p.blurVA.toFixed(3);
+        }
+        if (typeof p.etOn === 'boolean') {
+          this.etOn = p.etOn;
+        }
+        if (typeof p.cameraDeviceId === 'string') {
+          this._preferredCameraDeviceId = p.cameraDeviceId;
         }
       },
 
