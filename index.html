@@ -1000,6 +1000,13 @@ void main() {
         this.btnSettings.classList.toggle('on', this.settingsOpen);
       },
 
+      closeSettings() {
+        if (!this.settingsOpen) return;
+        this.settingsOpen = false;
+        this.settingsPanel.style.display = 'none';
+        this.btnSettings.classList.remove('on');
+      },
+
       onLanguageChange() {
         const v = this.langSelect.value;
         try {
@@ -1101,6 +1108,11 @@ void main() {
     sim.blurSlider.addEventListener('input', () => sim.onBlurChange());
     sim.grayModeSelect.addEventListener('change', () => sim.onGrayModeChange());
     sim.langSelect.addEventListener('change', () => sim.onLanguageChange());
+    document.addEventListener('click', (e) => {
+      if (!sim.settingsOpen) return;
+      if (sim.settingsPanel.contains(e.target) || sim.btnSettings.contains(e.target)) return;
+      sim.closeSettings();
+    });
 
     let resizeTimeout;
     window.addEventListener('resize', () => {
