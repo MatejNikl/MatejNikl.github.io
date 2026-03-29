@@ -376,6 +376,7 @@ void main() {
       AE_LUM_DEADBAND: 0.02,
       autoET: true,
       _etApplyPending: false,
+      _wakeLock: null,
 
       initGL() {
         const gl = this.canvas.getContext('webgl', { antialias: false, depth: false, stencil: false });
@@ -636,6 +637,7 @@ void main() {
           await this.attachAndPrepareStream(stream);
           await this.enumerateCameras();
           this.processFrame();
+          this.acquireWakeLock();
         } catch (err) {
           this.showError('errCameraFailed', err.message);
         }
@@ -1009,11 +1011,27 @@ void main() {
         console.error(fmt);
       },
 
+      async acquireWakeLock() {
+        if (!navigator.wakeLock) return;
+        try {
+          this._wakeLock = await navigator.wakeLock.request('screen');
+          this._wakeLock.addEventListener('release', () => { this._wakeLock = null; });
+        } catch (e) { /* permission denied or not supported */ }
+      },
+
+      releaseWakeLock() {
+        if (this._wakeLock) {
+          this._wakeLock.release().catch(() => {});
+          this._wakeLock = null;
+        }
+      },
+
       cleanup() {
         if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = null; }
         if (this.stream) { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
         this.track = null;
         this.gl = null;
+        this.releaseWakeLock();
       }
     };
 
@@ -1049,6 +1067,7 @@ void main() {
           sim.track = null;
           sim.video.srcObject = null;
         }
+        sim.releaseWakeLock();
       } else {
         if (sim.stream || sim.rafId) return;
         try {
@@ -1063,6 +1082,7 @@ void main() {
           }
           await sim.attachAndPrepareStream(stream);
           sim.processFrame();
+          sim.acquireWakeLock();
         } catch (err) {
           sim.showError('errCameraFailed', err.message);
         }
