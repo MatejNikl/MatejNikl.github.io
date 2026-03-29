@@ -27,6 +27,12 @@ Controls are anchored top-right unless noted.
   if the camera exposes `iso` in capabilities, **ISO is fixed at 400** (clamped
   to the hardware min/max) on every `applyConstraints` call — there is no ISO
   slider.
+- **Fullscreen**: Shown only when the browser supports the Fullscreen API
+  (`document.fullscreenEnabled`). Toggles browser fullscreen mode, hiding
+  the URL bar and system navigation for a full edge-to-edge viewfinder.
+  Syncs state via `fullscreenchange` events, so the button reflects the
+  actual state even when the user exits fullscreen via system gesture.
+  Hidden on iOS Safari (which only supports fullscreen on `<video>` elements).
 - **Settings** (gear): Opens a panel below the gear with:
   - **Grayscale type**: Dropdown — **Science-based** (scotopic / rod-weighted
     luminance in the shader) vs **Plain B&W** (Rec. 601) when grayscale is on.
@@ -159,6 +165,21 @@ these constraints, most mobile browsers default to 640×480.
 
 The canvas is sized to `video.videoWidth` × `video.videoHeight` from the active
 stream; that size is not displayed on the page.
+
+## PWA / Add to Home Screen
+
+A `manifest.json` with `"display": "fullscreen"` allows users to install
+the app to their home screen. When launched from there, the browser chrome
+(URL bar, navigation) is completely hidden — the app behaves like a native
+camera app. The manifest includes 192×192 and 512×512 PNG icons.
+
+`<meta name="mobile-web-app-capable">` and
+`<meta name="apple-mobile-web-app-capable">` provide the same "Add to Home
+Screen" fullscreen behavior on older Android / iOS versions that predate
+full PWA manifest support.
+
+For users who access the app via a normal browser tab, a **Fullscreen**
+pill button provides an explicit opt-in to fullscreen mode (see UI section).
 
 ## Camera handling
 

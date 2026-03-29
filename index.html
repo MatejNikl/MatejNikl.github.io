@@ -3,6 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#000000">
+  <link rel="manifest" href="manifest.json">
   <title>Achromatopsia Simulator</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -137,6 +141,7 @@
     <div id="btn-gray" class="pill on" title="Turn off to see the camera in full color">Grayscale</div>
     <div id="btn-blur" class="pill on">Blur</div>
     <div id="btn-et" class="pill on hidden" title="Simulates glare / photophobia in bright conditions">Glare</div>
+    <div id="btn-fs" class="pill hidden" title="Toggle fullscreen mode">Fullscreen</div>
     <div id="btn-settings" class="pill pill-gear" title="Settings">&#x2699;</div>
   </div>
   <div id="settings-panel">
@@ -265,6 +270,8 @@ void main() {
         langAuto: 'System default',
         langEn: 'English',
         langCs: 'Czech',
+        fullscreen: 'Fullscreen',
+        fullscreenTitle: 'Toggle fullscreen mode',
       },
       cs: {
         title: 'Simulátor achromatopsie',
@@ -289,6 +296,8 @@ void main() {
         langAuto: 'Podle systému',
         langEn: 'Angličtina',
         langCs: 'Čeština',
+        fullscreen: 'Celá obrazovka',
+        fullscreenTitle: 'Přepnout režim celé obrazovky',
       },
     };
 
@@ -339,6 +348,7 @@ void main() {
       errorDiv: document.getElementById('error'),
       btnGray: document.getElementById('btn-gray'),
       btnET: document.getElementById('btn-et'),
+      btnFS: document.getElementById('btn-fs'),
       btnSettings: document.getElementById('btn-settings'),
       settingsPanel: document.getElementById('settings-panel'),
       etRow: document.getElementById('et-row'),
@@ -392,15 +402,6 @@ void main() {
       autoET: true,
       _etApplyPending: false,
       _wakeLock: null,
-      _fullscreenRequested: false,
-
-      requestFullscreen() {
-        if (this._fullscreenRequested) return;
-        this._fullscreenRequested = true;
-        const el = document.documentElement;
-        const rfs = el.requestFullscreen || el.webkitRequestFullscreen;
-        if (rfs) rfs.call(el).catch(() => {});
-      },
 
       initGL() {
         const gl = this.canvas.getContext('webgl', { antialias: false, depth: false, stencil: false });
@@ -1017,6 +1018,31 @@ void main() {
         return (1 / this.blurVA - 1) * K;
       },
 
+      initFullscreen() {
+        const fsEnabled = document.fullscreenEnabled || document.webkitFullscreenEnabled;
+        if (!fsEnabled) return;
+        this.btnFS.classList.remove('hidden');
+        document.addEventListener('fullscreenchange', () => this.syncFullscreenState());
+        document.addEventListener('webkitfullscreenchange', () => this.syncFullscreenState());
+      },
+
+      isFullscreen() {
+        return !!(document.fullscreenElement || document.webkitFullscreenElement);
+      },
+
+      syncFullscreenState() {
+        this.btnFS.classList.toggle('on', this.isFullscreen());
+      },
+
+      toggleFullscreen() {
+        if (this.isFullscreen()) {
+          (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+        } else {
+          const el = document.documentElement;
+          (el.requestFullscreen || el.webkitRequestFullscreen).call(el).catch(() => {});
+        }
+      },
+
       toggleSettings() {
         this.settingsOpen = !this.settingsOpen;
         if (this.settingsOpen) {
@@ -1058,6 +1084,8 @@ void main() {
         this.btnBlur.textContent = t.blur;
         this.btnET.textContent = t.glare;
         this.btnET.title = t.glareTitle;
+        this.btnFS.textContent = t.fullscreen;
+        this.btnFS.title = t.fullscreenTitle;
         this.btnSettings.title = t.settingsTitle;
         document.getElementById('label-gray-type').textContent = t.grayType;
         document.getElementById('label-language').textContent = t.langLabel;
@@ -1121,10 +1149,12 @@ void main() {
 
     sim.restorePrefs();
     sim.applyLocale();
+    sim.initFullscreen();
 
     sim.btnGray.addEventListener('click', () => sim.toggleGrayscale());
     sim.btnET.addEventListener('click', () => sim.toggleET());
     sim.btnBlur.addEventListener('click', () => sim.toggleBlur());
+    sim.btnFS.addEventListener('click', () => sim.toggleFullscreen());
     sim.btnSettings.addEventListener('click', () => sim.toggleSettings());
     sim.camSelect.addEventListener('change', () => sim.onCameraSelectChange());
     sim.etSlider.addEventListener('input', () => {
@@ -1136,7 +1166,6 @@ void main() {
     sim.grayModeSelect.addEventListener('change', () => sim.onGrayModeChange());
     sim.langSelect.addEventListener('change', () => sim.onLanguageChange());
     document.addEventListener('click', (e) => {
-      sim.requestFullscreen();
       if (!sim.settingsOpen) return;
       if (sim.settingsPanel.contains(e.target) || sim.btnSettings.contains(e.target)) return;
       sim.closeSettings();
