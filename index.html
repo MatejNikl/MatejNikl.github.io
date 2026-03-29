@@ -391,6 +391,15 @@ void main() {
       autoET: true,
       _etApplyPending: false,
       _wakeLock: null,
+      _fullscreenRequested: false,
+
+      requestFullscreen() {
+        if (this._fullscreenRequested) return;
+        this._fullscreenRequested = true;
+        const el = document.documentElement;
+        const rfs = el.requestFullscreen || el.webkitRequestFullscreen;
+        if (rfs) rfs.call(el).catch(() => {});
+      },
 
       initGL() {
         const gl = this.canvas.getContext('webgl', { antialias: false, depth: false, stencil: false });
@@ -1109,6 +1118,7 @@ void main() {
     sim.grayModeSelect.addEventListener('change', () => sim.onGrayModeChange());
     sim.langSelect.addEventListener('change', () => sim.onLanguageChange());
     document.addEventListener('click', (e) => {
+      sim.requestFullscreen();
       if (!sim.settingsOpen) return;
       if (sim.settingsPanel.contains(e.target) || sim.btnSettings.contains(e.target)) return;
       sim.closeSettings();
