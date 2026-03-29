@@ -293,6 +293,20 @@ void main() {
     };
 
     const LOCALE_STORAGE_KEY = 'achromatopsia-simulator-locale';
+    const PREFS_STORAGE_KEY = 'achromatopsia-simulator-prefs';
+
+    function loadPrefs() {
+      try {
+        const raw = localStorage.getItem(PREFS_STORAGE_KEY);
+        if (raw) return JSON.parse(raw);
+      } catch (e) { /* private mode or corrupt */ }
+      return null;
+    }
+
+    function savePrefs(prefs) {
+      try { localStorage.setItem(PREFS_STORAGE_KEY, JSON.stringify(prefs)); }
+      catch (e) { /* private mode */ }
+    }
 
     function pickLocale() {
       const list = (navigator.languages && navigator.languages.length)
@@ -907,13 +921,47 @@ void main() {
         }
       },
 
+      persistPrefs() {
+        savePrefs({
+          grayscaleOn: this.grayscaleOn,
+          grayMode: this.grayMode,
+          blurOn: this.blurOn,
+          blurVA: this.blurVA,
+        });
+      },
+
+      restorePrefs() {
+        const p = loadPrefs();
+        if (!p) return;
+        if (typeof p.grayscaleOn === 'boolean') {
+          this.grayscaleOn = p.grayscaleOn;
+          this.btnGray.classList.toggle('on', this.grayscaleOn);
+        }
+        if (p.grayMode === 'scotopic' || p.grayMode === 'rec601') {
+          this.grayMode = p.grayMode;
+          this.grayModeSelect.value = p.grayMode;
+        }
+        if (typeof p.blurOn === 'boolean') {
+          this.blurOn = p.blurOn;
+          this.btnBlur.classList.toggle('on', this.blurOn);
+          this.blurRow.style.display = this.blurOn ? 'flex' : 'none';
+        }
+        if (typeof p.blurVA === 'number' && p.blurVA >= 0.05 && p.blurVA <= 0.3) {
+          this.blurVA = p.blurVA;
+          this.blurSlider.value = Math.round(p.blurVA * 1000);
+          this.blurVal.textContent = p.blurVA.toFixed(3);
+        }
+      },
+
       toggleGrayscale() {
         this.grayscaleOn = !this.grayscaleOn;
         this.btnGray.classList.toggle('on', this.grayscaleOn);
+        this.persistPrefs();
       },
 
       onGrayModeChange() {
         this.grayMode = this.grayModeSelect.value;
+        this.persistPrefs();
       },
 
       toggleBlur() {
@@ -921,12 +969,14 @@ void main() {
         this.btnBlur.classList.toggle('on', this.blurOn);
         this.blurRow.style.display = this.blurOn ? 'flex' : 'none';
         this.updateBlurCSS();
+        this.persistPrefs();
       },
 
       onBlurChange() {
         this.blurVA = parseInt(this.blurSlider.value) / 1000;
         this.blurVal.textContent = this.blurVA.toFixed(3);
         this.updateBlurCSS();
+        this.persistPrefs();
       },
 
       updateBlurCSS() {
@@ -1035,6 +1085,7 @@ void main() {
       }
     };
 
+    sim.restorePrefs();
     sim.applyLocale();
 
     sim.btnGray.addEventListener('click', () => sim.toggleGrayscale());
