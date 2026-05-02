@@ -144,6 +144,7 @@
     <button type="button" id="btn-gray" class="pill on" aria-pressed="true" title="Turn off to see the camera in full color">Grayscale</button>
     <button type="button" id="btn-blur" class="pill on" aria-pressed="true">Blur</button>
     <button type="button" id="btn-freeze" class="pill" aria-pressed="false" title="Freeze the current frame">Freeze</button>
+    <button type="button" id="btn-photo" class="pill" aria-pressed="false" title="Save the current frame as a photo">Photo</button>
     <button type="button" id="btn-et" class="pill on hidden" aria-pressed="true" title="Simulates glare / photophobia in bright conditions">Glare</button>
     <button type="button" id="btn-fs" class="pill hidden" aria-pressed="false" title="Toggle fullscreen mode">Fullscreen</button>
     <button type="button" id="btn-settings" class="pill pill-gear" aria-pressed="false" aria-haspopup="true" aria-expanded="false" title="Settings">&#x2699;</button>
@@ -285,6 +286,8 @@ void main() {
         blur: 'Blur',
         freeze: 'Freeze',
         freezeTitle: 'Freeze the current frame',
+        photo: 'Photo',
+        photoTitle: 'Save the current frame as a photo',
         glare: 'Glare',
         glareTitle: 'Simulates glare / photophobia in bright conditions',
         settingsTitle: 'Settings',
@@ -299,6 +302,7 @@ void main() {
         errCameraUnsupported: 'Camera access not supported. Try Chrome or Safari.',
         errCameraFailed: 'Camera failed: {0}',
         errSwitchFailed: 'Camera switch failed: {0}',
+        errShareFailed: 'Sharing the photo failed.',
         langLabel: 'Language',
         langAuto: 'System default',
         langEn: 'English',
@@ -313,6 +317,8 @@ void main() {
         blur: 'Rozmazání',
         freeze: 'Zmrazit',
         freezeTitle: 'Zmrazit aktuální snímek',
+        photo: 'Foto',
+        photoTitle: 'Uložit aktuální snímek jako fotografii',
         glare: 'Oslnění',
         glareTitle: 'Simuluje oslnění při jasném osvětlení',
         settingsTitle: 'Nastavení',
@@ -327,6 +333,7 @@ void main() {
         errCameraUnsupported: 'Přístup ke kameře není podporován. Zkuste Chrome nebo Safari.',
         errCameraFailed: 'Kamera selhala: {0}',
         errSwitchFailed: 'Přepnutí kamery selhalo: {0}',
+        errShareFailed: 'Sdílení fotografie selhalo.',
         langLabel: 'Jazyk',
         langAuto: 'Podle systému',
         langEn: 'Angličtina',
@@ -383,6 +390,7 @@ void main() {
       grayModeSelect: document.getElementById('gray-mode'),
       btnBlur: document.getElementById('btn-blur'),
       btnFreeze: document.getElementById('btn-freeze'),
+      btnPhoto: document.getElementById('btn-photo'),
       blurRow: document.getElementById('blur-row'),
       blurSlider: document.getElementById('blur-slider'),
       blurVal: document.getElementById('blur-val'),
@@ -1105,6 +1113,54 @@ void main() {
         }
       },
 
+      /** Re-render synchronously and capture the current canvas to a PNG.
+       *  WebGL is initialised without preserveDrawingBuffer, so the back
+       *  buffer is only guaranteed to survive long enough for toBlob if
+       *  we redraw immediately before the call within the same task. */
+      savePhoto() {
+        if (!this.gl || !this.blurProgram) return;
+        this.renderFrame();
+        const filename = 'achromat-' + this.captureTimestamp() + '.png';
+        this.canvas.toBlob((blob) => {
+          if (!blob) { this.showError('errShareFailed'); return; }
+          this.shareBlob(blob, filename).catch(() => this.showError('errShareFailed'));
+        }, 'image/png');
+      },
+
+      /** ISO-ish timestamp safe for filenames on every OS (no colons). */
+      captureTimestamp() {
+        const d = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+          + '_' + pad(d.getHours()) + '-' + pad(d.getMinutes()) + '-' + pad(d.getSeconds());
+      },
+
+      /** Web Share with files where supported, else trigger a hidden
+       *  <a download>. Treats user cancellation as success (no error). */
+      async shareBlob(blob, filename) {
+        const file = new File([blob], filename, { type: blob.type });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          try {
+            await navigator.share({ files: [file] });
+            return;
+          } catch (e) {
+            if (e && e.name === 'AbortError') return;
+            // Fall through to the download path on any other share error.
+          }
+        }
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          a.remove();
+          URL.revokeObjectURL(url);
+        }, 0);
+      },
+
       getBlurSigma() {
         const K = 0.3;
         return (1 / this.blurVA - 1) * K;
@@ -1178,6 +1234,8 @@ void main() {
         this.btnBlur.textContent = t.blur;
         this.btnFreeze.textContent = t.freeze;
         this.btnFreeze.title = t.freezeTitle;
+        this.btnPhoto.textContent = t.photo;
+        this.btnPhoto.title = t.photoTitle;
         this.btnET.textContent = t.glare;
         this.btnET.title = t.glareTitle;
         this.btnFS.textContent = t.fullscreen;
@@ -1283,6 +1341,7 @@ void main() {
     sim.btnET.addEventListener('click', () => sim.toggleET());
     sim.btnBlur.addEventListener('click', () => sim.toggleBlur());
     sim.btnFreeze.addEventListener('click', () => sim.toggleFreeze());
+    sim.btnPhoto.addEventListener('click', () => sim.savePhoto());
     sim.btnFS.addEventListener('click', () => sim.toggleFullscreen());
     sim.btnSettings.addEventListener('click', () => sim.toggleSettings());
     sim.camSelect.addEventListener('change', () => sim.onCameraSelectChange());
