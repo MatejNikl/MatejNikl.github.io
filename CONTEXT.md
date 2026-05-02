@@ -160,6 +160,20 @@ zero blur and increases as VA decreases. The constant K was calibrated consideri
 that convolved blur appears ~26% more degraded than equivalent natural optical
 blur (Artal et al.), so K was reduced from 0.4 to 0.3 to compensate.
 
+`getBlurSigma()` returns sigma in **CSS-display pixels** because that is the
+unit K was originally calibrated against (the legacy CSS engine uses it
+unchanged via `canvas.style.filter = 'blur(<sigma>px)'`). The shader engine
+needs a sigma in **internal-canvas pixels**: the canvas is laid out at
+`100vw / 100vh` with `object-fit: cover`, so one internal pixel renders as
+`max(clientW/w, clientH/h)` display pixels (cover takes the larger ratio so
+content fully fills the box). `getShaderBlurSigma()` divides by that scale
+factor — equivalently multiplies by `min(w/clientW, h/clientH)` — to keep the
+two engines visually equivalent across desktop, tablet, and phone layouts.
+Without this correction the shader looked 1.5–2x weaker on typical desktop
+viewports. A standalone edge-fitter happily reported the same effective sigma
+for both engines because both pipelines do operate at the *same* sigma — they
+just measure that sigma in different coordinate systems.
+
 ### Why a shader-based separable Gaussian?
 
 The earlier implementation applied `filter: blur()` to the `<canvas>` element

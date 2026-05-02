@@ -478,7 +478,7 @@ void main() {
       blurProgram: null,
       blurUniforms: null,
       blurAPos: -1,
-      blurMaxLevel: 2,
+      blurMaxLevel: 4,
       blurSrcFbos: [],
       blurPingFbos: [],
       glTexture: null,
@@ -853,7 +853,7 @@ void main() {
 
         this._applyCssBlur();
         const useShader = this.blurEngine === 'shader';
-        const sigma = (useShader && this.blurOn && this.blurSrcFbos.length) ? this.getBlurSigma() : 0;
+        const sigma = (useShader && this.blurOn && this.blurSrcFbos.length) ? this.getShaderBlurSigma() : 0;
 
         if (sigma <= 0) {
           this._runPrep(this.glTexture, null, w, h, true);
@@ -894,10 +894,10 @@ void main() {
 
       /** Choose the smallest power-of-two downsample level whose
        *  sigma-at-level stays within the 13-tap kernel's effective
-       *  half-width (~4 sigma at sigma <= 1.5 px). Capped at
-       *  blurMaxLevel because sigma at slider VA 0.05 only reaches ~5.7
-       *  full-res pixels, and one level of downsampling is enough to
-       *  bring that within the kernel. */
+       *  half-width (~4 sigma at sigma <= 1.5 px). blurMaxLevel
+       *  determines how aggressively we can shrink: VA 0.05 with the
+       *  display-scale correction reaches ~14 internal px on phones in
+       *  portrait, so a /16 quarter-of-a-quarter is sometimes needed. */
       _pickBlurLevel(sigma) {
         const sigmaCap = 1.5;
         let level = 0;
@@ -1510,9 +1510,37 @@ void main() {
         }, 0);
       },
 
+      /** Display-pixel sigma derived from the visual-acuity slider.
+       *  K was historically calibrated against CSS filter: blur(sigma px),
+       *  which operates in CSS-display pixels, so this stays the
+       *  semantic source of truth and the CSS engine consumes it
+       *  directly. The shader engine has to convert through
+       *  getShaderBlurSigma() to keep matching the CSS strength. */
       getBlurSigma() {
         const K = 0.3;
         return (1 / this.blurVA - 1) * K;
+      },
+
+      /** Internal-pixel sigma for the shader pipeline. The canvas
+       *  element is laid out at 100vw / 100vh with object-fit: cover, so
+       *  one internal pixel is rendered as
+       *    s = max(clientW/w, clientH/h)
+       *  display pixels (cover takes the larger ratio so content fills
+       *  the box). To match the CSS engine's blur(sigma px) -- where
+       *  sigma is in *display* pixels and applied after this scaling --
+       *  the shader has to blur a wider region in internal pixels:
+       *    sigma_internal = sigma_display / s
+       *                   = sigma_display * min(w/clientW, h/clientH)
+       *  Without this correction shader blur looked weaker by ~1.5-2x
+       *  on typical desktop layouts, even though the standalone edge
+       *  fitter happily reported identical sigmas. */
+      getShaderBlurSigma() {
+        const sigma = this.getBlurSigma();
+        const cw = this.canvas.clientWidth, ch = this.canvas.clientHeight;
+        const w = this.canvas.width, h = this.canvas.height;
+        if (!cw || !ch || !w || !h) return sigma;
+        const mult = Math.min(w / cw, h / ch);
+        return sigma * mult;
       },
 
       initFullscreen() {
@@ -1726,7 +1754,12 @@ void main() {
     let resizeTimeout;
     window.addEventListener('resize', () => {
       clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(() => sim.updateCanvasSize(), 100);
+      resizeTimeout = setTimeout(() => {
+        sim.updateCanvasSize();
+        // Display-pixel sigma changes with the layout box, so redraw
+        // even if rAF is paused (frozen, suspended, etc.).
+        if (!sim.rafId) sim.renderFrame();
+      }, 100);
     });
     window.addEventListener('unload', () => sim.suspend());
     document.addEventListener('visibilitychange', () => {
