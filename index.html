@@ -706,31 +706,23 @@ void main() {
       },
 
       detectCapabilities() {
-        this.btnET.classList.add('hidden');
         this.supportsET = false;
         this.supportsISO = false;
-        if (!this.track?.getCapabilities) {
-          if (this.etOn) this.disableET();
-          return;
+        this.caps = this.track?.getCapabilities ? this.track.getCapabilities() : null;
+        if (this.caps) {
+          console.log('Camera capabilities:', this.caps);
+          this.supportsET = !!(this.caps.exposureMode?.includes('manual') && this.caps.exposureTime);
+          this.supportsISO = !!this.caps.iso;
         }
-        this.caps = this.track.getCapabilities();
-        console.log('Camera capabilities:', this.caps);
 
-        this.supportsET = !!(
-          this.caps.exposureMode?.includes('manual') &&
-          this.caps.exposureTime
-        );
-        this.supportsISO = !!(this.caps.iso);
+        this.btnET.classList.toggle('hidden', !this.supportsET);
+        this.btnET.classList.toggle('on', this.supportsET && this.etOn);
+        this.etRow.style.display = (this.supportsET && this.etOn) ? 'flex' : 'none';
+        this.updateAutoIndicator();
 
-        if (this.supportsET) {
-          this.btnET.classList.remove('hidden');
-          this.btnET.classList.toggle('on', this.etOn);
-          if (this.etOn) {
-            this.etRow.style.display = 'flex';
-            this.updateAutoIndicator();
-          }
-        } else if (this.etOn) {
-          this.disableET();
+        if (!this.supportsET) {
+          this.manualET = null;
+          void this.resetExposure();
         }
 
         this.aperture = 1.8;
@@ -822,14 +814,6 @@ void main() {
       onCameraSelectChange() {
         const idx = parseInt(this.camSelect.value);
         if (idx !== this.cameraIndex) this.switchCamera(idx);
-      },
-
-      disableET() {
-        this.etOn = false;
-        this.btnET.classList.remove('on');
-        this.etRow.style.display = 'none';
-        this.manualET = null;
-        void this.resetExposure();
       },
 
       /** ISO applied with manual ET when the camera supports it; matches S22 calibration. */
