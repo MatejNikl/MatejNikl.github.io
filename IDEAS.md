@@ -25,17 +25,6 @@ Ratings are a rough hint, not gospel:
 These have the best impact-to-effort ratio and are concrete enough to
 pick up immediately.
 
-### Nystagmus simulation — impact ★★★ · effort ★
-
-Almost every complete achromat has involuntary eye oscillations
-(nystagmus) that destabilise fixation and degrade effective acuity.
-A subtle sinusoidal CSS `translate()` on the canvas (~2–4 Hz, small
-amplitude, ~2–4 px) would approximate the instability without any
-shader changes — add as a toggle pill alongside Grayscale/Blur. This
-is the single most-requested missing piece of feedback from people
-who have been shown the current simulator: "is it really this
-*still*?" Respect `prefers-reduced-motion`.
-
 ### Hide controls on inactivity — impact ★★ · effort ★
 
 Auto-fade the pill row and slider after ~3 s of no interaction,
@@ -80,6 +69,48 @@ which are common on Android when another app held the camera.
 ---
 
 ## Simulation accuracy
+
+### Nystagmus contribution to acuity (NOT a shaky picture) — impact ★★ · effort ★★
+
+**Counter-intuitive but well established:** people with infantile
+(congenital) nystagmus — which includes virtually all complete
+achromats — **do not perceive the world as shaking.** The visual
+cortex develops alongside the oscillating retinal image and never
+forms the perceptual "stable world" reference that acquired-nystagmus
+patients lose. The two standard sources both spell this out:
+
+- Straube et al., *Nystagmus and oscillopsia*, Eur. J. Neurol., 2012:
+  "Congenital nystagmus is a fixational nystagmus... Typically, the
+  patients report **little or no oscillopsia or visual blurring**,
+  compared with the fast nystagmus velocities seen."
+- Biousse & Newman, *Neuro-ophthalmology Illustrated*, 2nd ed.,
+  Thieme, 2012, §16.1.2: "**There is no oscillopsia**, but there is
+  decreased visual acuity (related to associated afferent conditions
+  and to the nystagmus present in primary gaze)."
+
+So a literal "shake the canvas" toggle would actively misrepresent
+the experience. What the nystagmus *does* contribute is reduced
+**foveation time** (the fovea is on-target less of the day) plus a
+real retinal smear during the slow phases — both of which present
+subjectively as further acuity loss, not motion. Two ways to model
+that honestly:
+
+- **Anisotropic motion blur along the nystagmus axis.** Achromat
+  nystagmus is predominantly horizontal pendular (~2–8 Hz, ~1–10°
+  amplitude). A horizontal-only directional blur, layered on top of
+  the existing isotropic Gaussian, captures the slow-phase smear
+  without implying perceived shake. Implement either as a separable
+  shader pass or with `filter: blur()` plus a horizontal-axis CSS
+  motion-blur trick.
+- **Foveation penalty bump.** Offer a "with nystagmus" preset that
+  multiplies the configured VA by ~0.7 to reflect the foveation-time
+  cost on top of the cone deficit. Cheap, no shader work.
+
+Whichever route is taken, the UI copy must **not** suggest that the
+child sees the world moving — it should explain that nystagmus
+further blurs vision rather than destabilising it. Worth pairing
+with the Info / about overlay so the explanation lives next to the
+control.
 
 ### Contrast sensitivity loss — impact ★★★ · effort ★★
 
