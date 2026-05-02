@@ -41,12 +41,15 @@
       border: 2px solid rgba(255,255,255,0.25);
       background: rgba(0,0,0,0.5);
       color: #999;
-      font-size: 13px;
-      font-weight: 600;
+      font: 600 13px/1.2 system-ui, sans-serif;
       cursor: pointer;
       -webkit-tap-highlight-color: transparent;
       user-select: none;
       white-space: nowrap;
+    }
+    .pill:focus-visible {
+      outline: 2px solid #fff;
+      outline-offset: 2px;
     }
     .pill:active { background: rgba(255,255,255,0.15); }
     .pill.on { border-color: rgba(255,255,255,0.7); color: #fff; }
@@ -138,11 +141,11 @@
   <canvas id="canvas"></canvas>
   <div id="error" role="alert"></div>
   <div class="controls">
-    <div id="btn-gray" class="pill on" title="Turn off to see the camera in full color">Grayscale</div>
-    <div id="btn-blur" class="pill on">Blur</div>
-    <div id="btn-et" class="pill on hidden" title="Simulates glare / photophobia in bright conditions">Glare</div>
-    <div id="btn-fs" class="pill hidden" title="Toggle fullscreen mode">Fullscreen</div>
-    <div id="btn-settings" class="pill pill-gear" title="Settings">&#x2699;</div>
+    <button type="button" id="btn-gray" class="pill on" aria-pressed="true" title="Turn off to see the camera in full color">Grayscale</button>
+    <button type="button" id="btn-blur" class="pill on" aria-pressed="true">Blur</button>
+    <button type="button" id="btn-et" class="pill on hidden" aria-pressed="true" title="Simulates glare / photophobia in bright conditions">Glare</button>
+    <button type="button" id="btn-fs" class="pill hidden" aria-pressed="false" title="Toggle fullscreen mode">Fullscreen</button>
+    <button type="button" id="btn-settings" class="pill pill-gear" aria-pressed="false" aria-haspopup="true" aria-expanded="false" title="Settings">&#x2699;</button>
   </div>
   <div id="settings-panel">
     <div class="settings-row">
@@ -879,10 +882,16 @@ void main() {
         this.sendManualET(newET, 'Auto ET');
       },
 
+      /** Toggle a pill button's visual + ARIA pressed state together. */
+      setPillState(btn, on) {
+        btn.classList.toggle('on', on);
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      },
+
       applyETUIState() {
         const visible = this.supportsET && this.etOn;
         this.btnET.classList.toggle('hidden', !this.supportsET);
-        this.btnET.classList.toggle('on', visible);
+        this.setPillState(this.btnET, visible);
         this.etRow.style.display = visible ? 'flex' : 'none';
         this.etAutoSpan.style.display = (visible && this.autoET) ? '' : 'none';
       },
@@ -927,7 +936,7 @@ void main() {
         if (!p) return;
         if (typeof p.grayscaleOn === 'boolean') {
           this.grayscaleOn = p.grayscaleOn;
-          this.btnGray.classList.toggle('on', this.grayscaleOn);
+          this.setPillState(this.btnGray, this.grayscaleOn);
         }
         if (p.grayMode === 'scotopic' || p.grayMode === 'rec601') {
           this.grayMode = p.grayMode;
@@ -935,7 +944,7 @@ void main() {
         }
         if (typeof p.blurOn === 'boolean') {
           this.blurOn = p.blurOn;
-          this.btnBlur.classList.toggle('on', this.blurOn);
+          this.setPillState(this.btnBlur, this.blurOn);
           this.blurRow.style.display = this.blurOn ? 'flex' : 'none';
         }
         if (typeof p.blurVA === 'number' && p.blurVA >= 0.05 && p.blurVA <= 0.3) {
@@ -953,7 +962,7 @@ void main() {
 
       toggleGrayscale() {
         this.grayscaleOn = !this.grayscaleOn;
-        this.btnGray.classList.toggle('on', this.grayscaleOn);
+        this.setPillState(this.btnGray, this.grayscaleOn);
         this.persistPrefs();
       },
 
@@ -964,7 +973,7 @@ void main() {
 
       toggleBlur() {
         this.blurOn = !this.blurOn;
-        this.btnBlur.classList.toggle('on', this.blurOn);
+        this.setPillState(this.btnBlur, this.blurOn);
         this.blurRow.style.display = this.blurOn ? 'flex' : 'none';
         this.updateBlurCSS();
         this.persistPrefs();
@@ -1001,7 +1010,7 @@ void main() {
       },
 
       syncFullscreenState() {
-        this.btnFS.classList.toggle('on', this.isFullscreen());
+        this.setPillState(this.btnFS, this.isFullscreen());
       },
 
       toggleFullscreen() {
@@ -1019,22 +1028,19 @@ void main() {
         } catch (e) { /* old WebKit may throw synchronously */ }
       },
 
-      toggleSettings() {
-        this.settingsOpen = !this.settingsOpen;
-        if (this.settingsOpen) {
+      setSettingsOpen(open) {
+        this.settingsOpen = open;
+        if (open) {
           const rect = this.btnSettings.getBoundingClientRect();
           this.settingsPanel.style.top = (rect.bottom + 6) + 'px';
         }
-        this.settingsPanel.style.display = this.settingsOpen ? 'flex' : 'none';
-        this.btnSettings.classList.toggle('on', this.settingsOpen);
+        this.settingsPanel.style.display = open ? 'flex' : 'none';
+        this.setPillState(this.btnSettings, open);
+        this.btnSettings.setAttribute('aria-expanded', open ? 'true' : 'false');
       },
 
-      closeSettings() {
-        if (!this.settingsOpen) return;
-        this.settingsOpen = false;
-        this.settingsPanel.style.display = 'none';
-        this.btnSettings.classList.remove('on');
-      },
+      toggleSettings() { this.setSettingsOpen(!this.settingsOpen); },
+      closeSettings()  { if (this.settingsOpen) this.setSettingsOpen(false); },
 
       onLanguageChange() {
         const v = this.langSelect.value;
@@ -1062,6 +1068,7 @@ void main() {
         this.btnFS.textContent = t.fullscreen;
         this.btnFS.title = t.fullscreenTitle;
         this.btnSettings.title = t.settingsTitle;
+        this.btnSettings.setAttribute('aria-label', t.settingsTitle);
         document.getElementById('label-gray-type').textContent = t.grayType;
         document.getElementById('label-language').textContent = t.langLabel;
         document.getElementById('label-camera').textContent = t.camera;
