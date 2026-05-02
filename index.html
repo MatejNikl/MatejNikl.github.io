@@ -402,6 +402,7 @@ void main() {
       autoET: true,
       _etApplyPending: false,
       _wakeLock: null,
+      _resumePending: false,
 
       initGL() {
         const gl = this.canvas.getContext('webgl', { antialias: false, depth: false, stencil: false });
@@ -1194,7 +1195,8 @@ void main() {
         }
         sim.releaseWakeLock();
       } else {
-        if (sim.stream || sim.rafId) return;
+        if (sim.stream || sim.rafId || sim._resumePending) return;
+        sim._resumePending = true;
         try {
           const deviceId = sim.cameras[sim.cameraIndex]?.deviceId;
           const videoConstraints = deviceId
@@ -1209,7 +1211,9 @@ void main() {
           sim.processFrame();
           sim.acquireWakeLock();
         } catch (err) {
-          sim.showError('errCameraFailed', err.message);
+          if (!document.hidden) sim.showError('errCameraFailed', err.message);
+        } finally {
+          sim._resumePending = false;
         }
       }
     });
