@@ -221,15 +221,15 @@ void main() {
     gl_Position = vec4(aPos, 0.0, 1.0);
 }`;
 
-    // Separable Gaussian blur with grayscale folded into pass A.
-    // 9-tap unit-sigma kernel scaled by uSigma (in pixels) along uTexelStep,
-    // so a single shader handles the full VA range without recompiling.
-    // Outer-tap weights are tiny but kept for symmetry / branch-free unroll.
-    const BLUR_FRAG_SRC = `
+    // Source-prep / passthrough shader: samples uSrc, optionally flips the
+    // y axis (true for the upside-down video texture, false for FBOs that
+    // are already in canvas orientation), and optionally folds in
+    // grayscale conversion. Bilinear MIN_FILTER on the source texture
+    // doubles this as a clean 2x2 box downsample when the output is
+    // exactly half the source resolution.
+    const PREP_FRAG_SRC = `
 precision mediump float;
 uniform sampler2D uSrc;
-uniform vec2 uTexelStep;
-uniform float uSigma;
 uniform bool uGrayscale;
 uniform int uGrayMode;
 uniform bool uFlipY;
@@ -247,7 +247,9 @@ float linearToSrgb(float c) {
     return mix(lo, hi, step(0.0031308, c));
 }
 
-vec4 sampleSrc(vec2 uv) {
+void main() {
+    vec2 uv = vTexCoord;
+    if (uFlipY) uv.y = 1.0 - uv.y;
     vec4 c = texture2D(uSrc, uv);
     if (uGrayscale) {
         float lum;
@@ -259,29 +261,36 @@ vec4 sampleSrc(vec2 uv) {
         }
         c = vec4(vec3(lum), 1.0);
     }
-    return c;
-}
+    gl_FragColor = c;
+}`;
+
+    // Separable Gaussian blur at unit pixel spacing on the bound source
+    // texture. The host JS picks a downsample level so that the effective
+    // sigma at the level's resolution stays <= ~1.5 px, which keeps the
+    // kernel half-width within MAX_BLUR_TAPS_HALF (6 -> 13 total taps
+    // covering ~+/-4 sigma). Weights are baked in JS each time sigma
+    // changes and uploaded as a uniform array. uTaps controls how many
+    // of those weights are actually summed; outer entries beyond uTaps
+    // are zero in JS so the masking step inside the loop is purely a
+    // GPU-friendly multiply, not a branch on uniform data.
+    const MAX_BLUR_TAPS_HALF = 6;
+    const MAX_BLUR_TAPS = 2 * MAX_BLUR_TAPS_HALF + 1;
+    const BLUR_FRAG_SRC = `
+precision mediump float;
+uniform sampler2D uSrc;
+uniform vec2 uTexelStep;
+uniform int uTaps;
+uniform float uWeights[${MAX_BLUR_TAPS_HALF + 1}];
+varying vec2 vTexCoord;
 
 void main() {
-    vec2 uv = vTexCoord;
-    if (uFlipY) uv.y = 1.0 - uv.y;
-
-    if (uSigma <= 0.0) {
-        gl_FragColor = sampleSrc(uv);
-        return;
+    vec4 sum = texture2D(uSrc, vTexCoord) * uWeights[0];
+    for (int i = 1; i <= ${MAX_BLUR_TAPS_HALF}; i++) {
+        if (i > uTaps) break;
+        float fi = float(i);
+        sum += texture2D(uSrc, vTexCoord + uTexelStep * fi) * uWeights[i];
+        sum += texture2D(uSrc, vTexCoord - uTexelStep * fi) * uWeights[i];
     }
-
-    vec2 d = uTexelStep * uSigma;
-    vec4 sum = vec4(0.0);
-    sum += sampleSrc(uv - d * 4.0) * 0.0001338;
-    sum += sampleSrc(uv - d * 3.0) * 0.004432;
-    sum += sampleSrc(uv - d * 2.0) * 0.05399;
-    sum += sampleSrc(uv - d       ) * 0.2420;
-    sum += sampleSrc(uv           ) * 0.3989;
-    sum += sampleSrc(uv + d       ) * 0.2420;
-    sum += sampleSrc(uv + d * 2.0) * 0.05399;
-    sum += sampleSrc(uv + d * 3.0) * 0.004432;
-    sum += sampleSrc(uv + d * 4.0) * 0.0001338;
     gl_FragColor = sum;
 }`;
 
@@ -449,10 +458,15 @@ void main() {
       track: null,
       rafId: null,
       gl: null,
+      prepProgram: null,
+      prepUniforms: null,
+      prepAPos: -1,
       blurProgram: null,
       blurUniforms: null,
       blurAPos: -1,
-      blurFboH: null,
+      blurMaxLevel: 2,
+      blurSrcFbos: [],
+      blurPingFbos: [],
       glTexture: null,
       texSourceCanvas: null,
       texSourceCtx: null,
@@ -504,50 +518,45 @@ void main() {
         if (!gl) return false;
         this.gl = gl;
 
-        const vs = gl.createShader(gl.VERTEX_SHADER);
-        gl.shaderSource(vs, VERT_SRC);
-        gl.compileShader(vs);
-        if (!gl.getShaderParameter(vs, gl.COMPILE_STATUS)) {
-          console.error('Vertex shader:', gl.getShaderInfoLog(vs));
-          return false;
-        }
+        const vs = this._compileShader(gl, gl.VERTEX_SHADER, VERT_SRC, 'Vertex shader');
+        if (!vs) return false;
+        const prepFs = this._compileShader(gl, gl.FRAGMENT_SHADER, PREP_FRAG_SRC, 'Prep shader');
+        if (!prepFs) return false;
+        const blurFs = this._compileShader(gl, gl.FRAGMENT_SHADER, BLUR_FRAG_SRC, 'Blur shader');
+        if (!blurFs) return false;
 
-        const fs = gl.createShader(gl.FRAGMENT_SHADER);
-        gl.shaderSource(fs, BLUR_FRAG_SRC);
-        gl.compileShader(fs);
-        if (!gl.getShaderParameter(fs, gl.COMPILE_STATUS)) {
-          console.error('Fragment shader:', gl.getShaderInfoLog(fs));
-          return false;
-        }
+        const prepProg = this._linkProgram(gl, vs, prepFs, 'Prep program');
+        if (!prepProg) return false;
+        const blurProg = this._linkProgram(gl, vs, blurFs, 'Blur program');
+        if (!blurProg) return false;
 
-        const prog = gl.createProgram();
-        gl.attachShader(prog, vs);
-        gl.attachShader(prog, fs);
-        gl.linkProgram(prog);
-        if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-          console.error('Program link:', gl.getProgramInfoLog(prog));
-          return false;
-        }
-        this.blurProgram = prog;
-        gl.useProgram(prog);
+        this.prepProgram = prepProg;
+        this.blurProgram = blurProg;
 
+        this.prepUniforms = {
+          uSrc: gl.getUniformLocation(prepProg, 'uSrc'),
+          uGrayscale: gl.getUniformLocation(prepProg, 'uGrayscale'),
+          uGrayMode: gl.getUniformLocation(prepProg, 'uGrayMode'),
+          uFlipY: gl.getUniformLocation(prepProg, 'uFlipY'),
+        };
         this.blurUniforms = {
-          uSrc: gl.getUniformLocation(prog, 'uSrc'),
-          uTexelStep: gl.getUniformLocation(prog, 'uTexelStep'),
-          uSigma: gl.getUniformLocation(prog, 'uSigma'),
-          uGrayscale: gl.getUniformLocation(prog, 'uGrayscale'),
-          uGrayMode: gl.getUniformLocation(prog, 'uGrayMode'),
-          uFlipY: gl.getUniformLocation(prog, 'uFlipY'),
+          uSrc: gl.getUniformLocation(blurProg, 'uSrc'),
+          uTexelStep: gl.getUniformLocation(blurProg, 'uTexelStep'),
+          uTaps: gl.getUniformLocation(blurProg, 'uTaps'),
+          uWeights: gl.getUniformLocation(blurProg, 'uWeights[0]'),
         };
 
         const quad = new Float32Array([-1,-1, 1,-1, -1,1, 1,1]);
         const buf = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, buf);
         gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
-        const aPos = gl.getAttribLocation(prog, 'aPos');
-        gl.enableVertexAttribArray(aPos);
-        gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
-        this.blurAPos = aPos;
+        this.prepAPos = gl.getAttribLocation(prepProg, 'aPos');
+        this.blurAPos = gl.getAttribLocation(blurProg, 'aPos');
+
+        gl.useProgram(prepProg);
+        gl.uniform1i(this.prepUniforms.uSrc, 0);
+        gl.useProgram(blurProg);
+        gl.uniform1i(this.blurUniforms.uSrc, 0);
 
         const tex = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -557,8 +566,6 @@ void main() {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         this.glTexture = tex;
 
-        gl.uniform1i(this.blurUniforms.uSrc, 0);
-
         this.initDownsamplePipeline(gl);
 
         if (!this._glLifecycleBound) {
@@ -566,7 +573,8 @@ void main() {
           this.canvas.addEventListener('webglcontextlost', (e) => {
             e.preventDefault();
             if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = null; }
-            this.blurFboH = null;
+            this.blurSrcFbos = [];
+            this.blurPingFbos = [];
             this.dsChain = [];
           });
           this.canvas.addEventListener('webglcontextrestored', () => {
@@ -581,6 +589,29 @@ void main() {
         }
 
         return true;
+      },
+
+      _compileShader(gl, type, src, label) {
+        const sh = gl.createShader(type);
+        gl.shaderSource(sh, src);
+        gl.compileShader(sh);
+        if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+          console.error(label + ':', gl.getShaderInfoLog(sh));
+          return null;
+        }
+        return sh;
+      },
+
+      _linkProgram(gl, vs, fs, label) {
+        const p = gl.createProgram();
+        gl.attachShader(p, vs);
+        gl.attachShader(p, fs);
+        gl.linkProgram(p);
+        if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+          console.error(label + ' link:', gl.getProgramInfoLog(p));
+          return null;
+        }
+        return p;
       },
 
       initDownsamplePipeline(gl) {
@@ -610,14 +641,32 @@ void main() {
         };
       },
 
-      buildBlurFbo(w, h) {
+      /** Allocate two parallel FBO chains at full / half / quarter
+       *  resolution: blurSrcFbos hold the prepared (and progressively
+       *  downsampled) source, blurPingFbos hold the horizontal-blur
+       *  intermediates. We only ever blur at one chosen level per
+       *  frame; the level is picked so the per-level sigma stays small
+       *  enough for a fixed 13-tap kernel to be a true Gaussian. */
+      buildBlurFbos(w, h) {
         const gl = this.gl;
         if (!gl) return;
-        if (this.blurFboH) {
-          gl.deleteTexture(this.blurFboH.tex);
-          gl.deleteFramebuffer(this.blurFboH.fbo);
-          this.blurFboH = null;
+        const oldSrc = this.blurSrcFbos, oldPing = this.blurPingFbos;
+        for (const f of oldSrc.concat(oldPing)) {
+          gl.deleteTexture(f.tex);
+          gl.deleteFramebuffer(f.fbo);
         }
+        this.blurSrcFbos = [];
+        this.blurPingFbos = [];
+        for (let level = 0; level <= this.blurMaxLevel; level++) {
+          const lw = Math.max(1, w >> level);
+          const lh = Math.max(1, h >> level);
+          this.blurSrcFbos.push(this._allocFbo(lw, lh));
+          this.blurPingFbos.push(this._allocFbo(lw, lh));
+        }
+      },
+
+      _allocFbo(w, h) {
+        const gl = this.gl;
         const tex = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, tex);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -629,7 +678,7 @@ void main() {
         gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
         gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        this.blurFboH = { tex, fbo, w, h };
+        return { tex, fbo, w, h };
       },
 
       buildDSChain(w, h) {
@@ -697,7 +746,7 @@ void main() {
           this.texSourceCanvas.width = vw;
           this.texSourceCanvas.height = vh;
         }
-        this.buildBlurFbo(vw, vh);
+        this.buildBlurFbos(vw, vh);
         this.buildDSChain(vw, vh);
       },
 
@@ -717,7 +766,6 @@ void main() {
       meterLuminance() {
         const gl = this.gl;
         if (!this.dsProgram || !this.dsChain.length) return -1;
-        const savedProg = gl.getParameter(gl.CURRENT_PROGRAM);
         gl.useProgram(this.dsProgram);
         gl.enableVertexAttribArray(this.dsAPos);
         gl.vertexAttribPointer(this.dsAPos, 2, gl.FLOAT, false, 0, 0);
@@ -740,11 +788,8 @@ void main() {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         const vw = this.canvas.width, vh = this.canvas.height;
         if (vw && vh) gl.viewport(0, 0, vw, vh);
-        gl.useProgram(savedProg);
-        if (this.blurAPos !== -1) {
-          gl.enableVertexAttribArray(this.blurAPos);
-          gl.vertexAttribPointer(this.blurAPos, 2, gl.FLOAT, false, 0, 0);
-        }
+        // No need to restore the prep / blur program here; renderFrame
+        // is the only other consumer and it switches programs itself.
 
         return px[0] / 255;
       },
@@ -768,53 +813,134 @@ void main() {
         if (!this.frozen) this.rafId = requestAnimationFrame(() => this.processFrame());
       },
 
-      /** Draw the current video texture to the screen, applying grayscale
-       *  and (optionally) a separable Gaussian blur. Reads from glTexture
-       *  (already uploaded by uploadVideoTexture) and leaves blurProgram
-       *  bound on exit so meterLuminance's save/restore stays cheap. */
+      /** Render the most-recently-uploaded video texture to the screen.
+       *  Pipeline:
+       *    prep  -> srcFbo[0]      grayscale + flip Y at full res
+       *    (downsample N times)    pure passthrough; LINEAR filter on the
+       *                            source gives a 2x2 box filter for free
+       *    blur H -> pingFbo[L]    separable Gaussian, weights baked in JS
+       *    blur V -> srcFbo[L]     overwrites the now-redundant src
+       *    upsample -> screen      bilinear MAG_FILTER smooths the final
+       *                            level back up to full resolution
+       *
+       *  When blur is off (sigma == 0) the pipeline collapses to a single
+       *  prep pass straight to the default framebuffer. */
       renderFrame() {
         const gl = this.gl;
-        if (!gl || gl.isContextLost() || !this.blurProgram) return;
+        if (!gl || gl.isContextLost() || !this.prepProgram || !this.blurProgram) return;
         const w = this.canvas.width, h = this.canvas.height;
         if (!w || !h) return;
 
+        const sigma = (this.blurOn && this.blurSrcFbos.length) ? this.getBlurSigma() : 0;
+
+        if (sigma <= 0) {
+          this._runPrep(this.glTexture, null, w, h, true);
+          return;
+        }
+
+        const level = this._pickBlurLevel(sigma);
+        const sigmaAtLevel = sigma / (1 << level);
+        const src0 = this.blurSrcFbos[0];
+        this._runPrep(this.glTexture, src0.fbo, src0.w, src0.h, true);
+
+        for (let k = 1; k <= level; k++) {
+          const dst = this.blurSrcFbos[k];
+          this._runPrep(this.blurSrcFbos[k - 1].tex, dst.fbo, dst.w, dst.h, false);
+        }
+
+        const target = this.blurSrcFbos[level];
+        const ping = this.blurPingFbos[level];
+        this._runBlur(target.tex, ping.fbo, ping.w, ping.h, sigmaAtLevel, true);
+        this._runBlur(ping.tex, target.fbo, target.w, target.h, sigmaAtLevel, false);
+
+        this._runPrep(target.tex, null, w, h, false);
+      },
+
+      /** Choose the smallest power-of-two downsample level whose
+       *  sigma-at-level stays within the 13-tap kernel's effective
+       *  half-width (~4 sigma at sigma <= 1.5 px). Capped at
+       *  blurMaxLevel because sigma at slider VA 0.05 only reaches ~5.7
+       *  full-res pixels, and one level of downsampling is enough to
+       *  bring that within the kernel. */
+      _pickBlurLevel(sigma) {
+        const sigmaCap = 1.5;
+        let level = 0;
+        let s = sigma;
+        while (s > sigmaCap && level < this.blurMaxLevel) {
+          s *= 0.5;
+          level++;
+        }
+        return level;
+      },
+
+      _runPrep(srcTex, dstFbo, dstW, dstH, flipY) {
+        const gl = this.gl;
+        gl.useProgram(this.prepProgram);
+        if (this.prepAPos !== -1) {
+          gl.enableVertexAttribArray(this.prepAPos);
+          gl.vertexAttribPointer(this.prepAPos, 2, gl.FLOAT, false, 0, 0);
+        }
+        const u = this.prepUniforms;
+        gl.uniform1i(u.uGrayscale, this.grayscaleOn ? 1 : 0);
+        gl.uniform1i(u.uGrayMode, this.grayMode === 'scotopic' ? 0 : 1);
+        gl.uniform1i(u.uFlipY, flipY ? 1 : 0);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, srcTex);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, dstFbo);
+        gl.viewport(0, 0, dstW, dstH);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      },
+
+      _runBlur(srcTex, dstFbo, dstW, dstH, sigma, horizontal) {
+        const gl = this.gl;
         gl.useProgram(this.blurProgram);
         if (this.blurAPos !== -1) {
           gl.enableVertexAttribArray(this.blurAPos);
           gl.vertexAttribPointer(this.blurAPos, 2, gl.FLOAT, false, 0, 0);
         }
-
         const u = this.blurUniforms;
-        const sigma = (this.blurOn && this.blurFboH) ? this.getBlurSigma() : 0;
-        const grayInt = this.grayscaleOn ? 1 : 0;
-        const grayMode = this.grayMode === 'scotopic' ? 0 : 1;
-
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, this.glTexture);
-        gl.uniform1i(u.uSrc, 0);
-        gl.uniform1i(u.uGrayscale, grayInt);
-        gl.uniform1i(u.uGrayMode, grayMode);
-        gl.uniform1i(u.uFlipY, 1);
-        gl.uniform1f(u.uSigma, sigma);
-        gl.uniform2f(u.uTexelStep, 1 / w, 0);
-
-        if (sigma > 0) {
-          gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurFboH.fbo);
-          gl.viewport(0, 0, w, h);
-          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-
-          gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-          gl.viewport(0, 0, w, h);
-          gl.bindTexture(gl.TEXTURE_2D, this.blurFboH.tex);
-          gl.uniform1i(u.uGrayscale, 0);
-          gl.uniform1i(u.uFlipY, 0);
-          gl.uniform2f(u.uTexelStep, 0, 1 / h);
-          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        const { weights, taps } = this._gaussianWeights(sigma);
+        gl.uniform1i(u.uTaps, taps);
+        gl.uniform1fv(u.uWeights, weights);
+        if (horizontal) {
+          gl.uniform2f(u.uTexelStep, 1 / dstW, 0);
         } else {
-          gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-          gl.viewport(0, 0, w, h);
-          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          gl.uniform2f(u.uTexelStep, 0, 1 / dstH);
         }
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, srcTex);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, dstFbo);
+        gl.viewport(0, 0, dstW, dstH);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      },
+
+      /** Build one half of a normalised Gaussian kernel at unit pixel
+       *  spacing. w[0] is the center weight, w[1..taps] are the
+       *  off-center weights (the shader applies each to both the +i
+       *  and -i sample). taps is the largest k for which the unit-
+       *  Gaussian PDF is above a 1e-3 cutoff, clamped to
+       *  MAX_BLUR_TAPS_HALF; weights beyond taps are zeroed so a wider
+       *  uTaps wouldn't change the result. */
+      _gaussianWeights(sigma) {
+        const max = MAX_BLUR_TAPS_HALF;
+        const w = new Float32Array(max + 1);
+        const cutoff = 1e-3;
+        const inv2s2 = 1 / (2 * sigma * sigma);
+        let taps = 0;
+        for (let i = 0; i <= max; i++) {
+          const v = Math.exp(-(i * i) * inv2s2);
+          if (i === 0 || v >= cutoff) {
+            w[i] = v;
+            if (i > 0) taps = i;
+          } else {
+            break;
+          }
+        }
+        let sum = w[0];
+        for (let i = 1; i <= taps; i++) sum += 2 * w[i];
+        const inv = 1 / sum;
+        for (let i = 0; i <= max; i++) w[i] *= inv;
+        return { weights: w, taps };
       },
 
       async start() {

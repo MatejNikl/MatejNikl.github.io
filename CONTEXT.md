@@ -170,27 +170,56 @@ blur. Moving the blur into the GL pipeline keeps capture honest and gives
 deterministic quality across browsers (CSS `blur()` is implementation-defined,
 especially at the lower end of the radius range).
 
-The pipeline is now:
+The pipeline is **downsample → small Gaussian → bilinear upsample**, the same
+strategy Skia uses on the GPU for non-trivial blur radii in `filter: blur()`.
+A small fixed-size kernel at unit pixel spacing is a true Gaussian, but its
+support (`±~4σ`) caps how large σ can be before the tails are truncated.
+Downsampling first lets us keep that same small kernel and still cover any
+radius — at half resolution one full-res sigma costs half a kernel pixel.
 
 ```
-videoTex --(passA: grayscale + horizontal blur)--> blurFboH
-blurFboH --(passB: vertical blur)--> default framebuffer (screen)
+videoTex --(prep: grayscale + flipY)----------> srcFbo[0]    full res
+srcFbo[0] --(passthrough, LINEAR filter)------> srcFbo[1]    half res
+srcFbo[1] --(passthrough, LINEAR filter)------> srcFbo[2]    quarter res
+srcFbo[L] --(blur H, σ_at_level)--------------> pingFbo[L]
+pingFbo[L] --(blur V, σ_at_level)-------------> srcFbo[L]    overwrites src
+srcFbo[L] --(passthrough, MAG_FILTER bilinear)> default framebuffer (screen)
 ```
 
-Both passes run the same fragment shader (`BLUR_FRAG_SRC`) — a `uPass`-style
-distinction is made via `uGrayscale` (only true in pass A) and a `uFlipY`
-flag that flips the v axis for the upside-down video texture but not for the
-already-canvas-oriented intermediate FBO. When **Blur is off** the shader
-short-circuits to a single center sample (`uSigma == 0` branch) and we skip
-pass B entirely, drawing pass A straight to the default framebuffer.
+The downsample step is just the prep shader rebound to render an FBO into a
+half-size FBO; with `MIN_FILTER = LINEAR`, sampling at the centre of every
+2×2 source block averages four pixels for free, which is the box filter we
+want to suppress aliasing of any high-frequency detail beyond the per-level
+Nyquist limit.
 
-The kernel is a 9-tap unit-sigma Gaussian sampled at offsets `±0..±4` with
-weights `{0.0001, 0.0044, 0.0540, 0.2420, 0.3989, …}` (normalised). The actual
-sample step is `uTexelStep * uSigma`, so the same shader covers the full VA
-slider range without recompiling — at small sigma the taps land within a
-pixel and bilinear filtering does the work; at large sigma (up to ~6 px at
-VA 0.05) the taps spread out and the kernel approximates a wider Gaussian
-with a small loss of fidelity that's invisible at typical viewing distance.
+The blur shader (`BLUR_FRAG_SRC`) does a separable, unit-spaced 13-tap
+Gaussian — center weight plus six off-center pairs. The host JS picks a
+**downsample level** so the per-level `σ_kernel = σ / 2^L` stays under
+`~1.5 px`, which keeps the kernel half-width within the shader's hard
+`MAX_BLUR_TAPS_HALF = 6` limit (covering `±4σ`, > 99.99 % of the kernel
+mass). Weights are baked in JS each frame from `σ_kernel` and uploaded as
+a `uniform float[7]`; a `uTaps` uniform tells the shader how many off-center
+samples to actually accumulate so we don't pay for taps whose weight is
+below a 1e-3 cutoff. For our slider range:
+
+| VA   | σ (full px) | level | σ at level | active taps |
+|------|-------------|-------|------------|-------------|
+| 0.30 | 0.7         | 0     | 0.7        | 2           |
+| 0.10 | 2.7         | 1     | 1.35       | 5           |
+| 0.05 | 5.7         | 2     | 1.425      | 5           |
+
+When **Blur is off** the entire FBO chain is skipped and the prep shader
+draws straight to the default framebuffer. That keeps the blur-off cost
+identical to the non-blur path.
+
+> **Earlier attempt that didn't work.** Before the downsample chain, the
+> blur shader scaled tap *spacing* by σ at full resolution (a 9-tap kernel
+> with samples at offsets `±k·σ`). It correctly sums to 1, but at large σ
+> the taps land 5–22 pixels apart and skip everything between, so high-
+> frequency detail leaked through (the blur looked too weak) and the image
+> ghosted at offsets of `σ` (visible banding around VA 0.05). A true Gaussian
+> needs dense sampling within `±3σ`, which the downsample-first approach
+> recovers cheaply.
 
 ### Why not `ctx.filter`?
 
