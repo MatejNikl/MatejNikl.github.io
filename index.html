@@ -370,6 +370,7 @@ void main() {
       glProgram: null,
       glUniforms: null,
       glTexture: null,
+      glAPos: -1,
       texSourceCanvas: null,
       texSourceCtx: null,
       useCanvasWorkaround: false,
@@ -449,6 +450,7 @@ void main() {
         const aPos = gl.getAttribLocation(prog, 'aPos');
         gl.enableVertexAttribArray(aPos);
         gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+        this.glAPos = aPos;
 
         const tex = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -616,9 +618,10 @@ void main() {
         const vw = this.canvas.width, vh = this.canvas.height;
         if (vw && vh) gl.viewport(0, 0, vw, vh);
         gl.useProgram(savedProg);
-        const mainAPos = gl.getAttribLocation(this.glProgram, 'aPos');
-        gl.enableVertexAttribArray(mainAPos);
-        gl.vertexAttribPointer(mainAPos, 2, gl.FLOAT, false, 0, 0);
+        if (this.glAPos !== -1) {
+          gl.enableVertexAttribArray(this.glAPos);
+          gl.vertexAttribPointer(this.glAPos, 2, gl.FLOAT, false, 0, 0);
+        }
 
         return px[0] / 255;
       },
