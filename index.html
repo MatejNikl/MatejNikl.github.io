@@ -188,6 +188,13 @@
       </select>
     </div>
     <div class="settings-row">
+      <label id="label-blur-engine">Blur engine</label>
+      <select id="blur-engine">
+        <option value="shader" selected>Shader (capturable)</option>
+        <option value="css">CSS (preview only)</option>
+      </select>
+    </div>
+    <div class="settings-row">
       <label id="label-language">Language</label>
       <select id="lang-select">
         <option value="auto" selected>System default</option>
@@ -337,6 +344,9 @@ void main() {
         grayType: 'Grayscale type',
         grayScience: 'Science-based',
         grayPlain: 'Plain B&W',
+        blurEngine: 'Blur engine',
+        blurEngineShader: 'Shader (capturable)',
+        blurEngineCSS: 'CSS (preview only)',
         camera: 'Camera',
         sharpness: 'Sharpness',
         shutter: 'Shutter',
@@ -375,6 +385,9 @@ void main() {
         grayType: 'Typ stupňů šedi',
         grayScience: 'Vědecky podložené',
         grayPlain: 'Obyčejná černobílá',
+        blurEngine: 'Engine rozmazání',
+        blurEngineShader: 'Shader (zachytí se)',
+        blurEngineCSS: 'CSS (jen náhled)',
         camera: 'Kamera',
         sharpness: 'Ostrost',
         shutter: 'Závěrka',
@@ -441,6 +454,7 @@ void main() {
       etSlider: document.getElementById('et-slider'),
       etVal: document.getElementById('et-val'),
       grayModeSelect: document.getElementById('gray-mode'),
+      blurEngineSelect: document.getElementById('blur-engine'),
       btnBlur: document.getElementById('btn-blur'),
       btnFreeze: document.getElementById('btn-freeze'),
       btnPhoto: document.getElementById('btn-photo'),
@@ -482,6 +496,8 @@ void main() {
       manualET: null,
       blurOn: true,
       blurVA: 0.10,
+      blurEngine: 'shader',
+      _cssBlurApplied: '',
       frozen: false,
       _mediaRecorder: null,
       _recordingChunks: [],
@@ -824,14 +840,20 @@ void main() {
        *                            level back up to full resolution
        *
        *  When blur is off (sigma == 0) the pipeline collapses to a single
-       *  prep pass straight to the default framebuffer. */
+       *  prep pass straight to the default framebuffer. The CSS engine
+       *  also takes that fast path here and applies blur via canvas
+       *  style.filter instead -- handy for A/B comparison, but the
+       *  resulting blur lives only in the compositor and is invisible
+       *  to canvas.toBlob / canvas.captureStream. */
       renderFrame() {
         const gl = this.gl;
         if (!gl || gl.isContextLost() || !this.prepProgram || !this.blurProgram) return;
         const w = this.canvas.width, h = this.canvas.height;
         if (!w || !h) return;
 
-        const sigma = (this.blurOn && this.blurSrcFbos.length) ? this.getBlurSigma() : 0;
+        this._applyCssBlur();
+        const useShader = this.blurEngine === 'shader';
+        const sigma = (useShader && this.blurOn && this.blurSrcFbos.length) ? this.getBlurSigma() : 0;
 
         if (sigma <= 0) {
           this._runPrep(this.glTexture, null, w, h, true);
@@ -854,6 +876,20 @@ void main() {
         this._runBlur(ping.tex, target.fbo, target.w, target.h, sigmaAtLevel, false);
 
         this._runPrep(target.tex, null, w, h, false);
+      },
+
+      /** Mirror the current blur sigma onto canvas.style.filter when the
+       *  CSS engine is selected, otherwise clear it. Called every frame
+       *  so it always reflects the latest sigma / on-state, but the
+       *  cached _cssBlurApplied check keeps it cheap when nothing has
+       *  changed. */
+      _applyCssBlur() {
+        const want = (this.blurEngine === 'css' && this.blurOn)
+          ? 'blur(' + this.getBlurSigma().toFixed(2) + 'px)'
+          : '';
+        if (this._cssBlurApplied === want) return;
+        this.canvas.style.filter = want;
+        this._cssBlurApplied = want;
       },
 
       /** Choose the smallest power-of-two downsample level whose
@@ -1221,6 +1257,7 @@ void main() {
           grayMode: this.grayMode,
           blurOn: this.blurOn,
           blurVA: this.blurVA,
+          blurEngine: this.blurEngine,
           etOn: this.etOn,
         };
         const camDevice = this.cameras[this.cameraIndex];
@@ -1249,6 +1286,10 @@ void main() {
           this.blurSlider.value = Math.round(p.blurVA * 1000);
           this.blurVal.textContent = p.blurVA.toFixed(3);
         }
+        if (p.blurEngine === 'shader' || p.blurEngine === 'css') {
+          this.blurEngine = p.blurEngine;
+          this.blurEngineSelect.value = p.blurEngine;
+        }
         if (typeof p.etOn === 'boolean') {
           this.etOn = p.etOn;
         }
@@ -1266,6 +1307,13 @@ void main() {
 
       onGrayModeChange() {
         this.grayMode = this.grayModeSelect.value;
+        this.renderFrame();
+        this.persistPrefs();
+      },
+
+      onBlurEngineChange() {
+        const v = this.blurEngineSelect.value;
+        this.blurEngine = (v === 'css') ? 'css' : 'shader';
         this.renderFrame();
         this.persistPrefs();
       },
@@ -1546,6 +1594,7 @@ void main() {
         this.btnSettings.title = t.settingsTitle;
         this.btnSettings.setAttribute('aria-label', t.settingsTitle);
         document.getElementById('label-gray-type').textContent = t.grayType;
+        document.getElementById('label-blur-engine').textContent = t.blurEngine;
         document.getElementById('label-language').textContent = t.langLabel;
         document.getElementById('label-camera').textContent = t.camera;
         document.getElementById('label-sharpness').textContent = t.sharpness;
@@ -1555,6 +1604,10 @@ void main() {
         const optR = this.grayModeSelect.querySelector('option[value="rec601"]');
         if (optS) optS.textContent = t.grayScience;
         if (optR) optR.textContent = t.grayPlain;
+        const optShader = this.blurEngineSelect.querySelector('option[value="shader"]');
+        const optCss = this.blurEngineSelect.querySelector('option[value="css"]');
+        if (optShader) optShader.textContent = t.blurEngineShader;
+        if (optCss) optCss.textContent = t.blurEngineCSS;
         const optAuto = this.langSelect.querySelector('option[value="auto"]');
         const optEn   = this.langSelect.querySelector('option[value="en"]');
         const optCs   = this.langSelect.querySelector('option[value="cs"]');
@@ -1662,6 +1715,7 @@ void main() {
     });
     sim.blurSlider.addEventListener('input', () => sim.onBlurChange());
     sim.grayModeSelect.addEventListener('change', () => sim.onGrayModeChange());
+    sim.blurEngineSelect.addEventListener('change', () => sim.onBlurEngineChange());
     sim.langSelect.addEventListener('change', () => sim.onLanguageChange());
     document.addEventListener('click', (e) => {
       if (!sim.settingsOpen) return;
