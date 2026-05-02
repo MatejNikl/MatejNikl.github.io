@@ -625,6 +625,7 @@ void main() {
       processFrame() {
         const gl = this.gl;
         if (!gl || gl.isContextLost()) return;
+        if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = null; }
 
         this.uploadVideoTexture();
 
@@ -790,8 +791,11 @@ void main() {
           ? targetIndex
           : (this.cameraIndex + 1) % this.cameras.length;
         const deviceId = this.cameras[this.cameraIndex].deviceId;
+        if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = null; }
         if (this.stream) {
           this.stream.getTracks().forEach(t => t.stop());
+          this.stream = null;
+          this.track = null;
           this.video.srcObject = null;
         }
         for (let attempt = 0; attempt < 3; attempt++) {
@@ -803,6 +807,7 @@ void main() {
             await this.attachAndPrepareStream(stream);
             this.camSelect.value = this.cameraIndex;
             this.persistPrefs();
+            this.processFrame();
             return;
           } catch (err) {
             if (attempt === 2) this.showError('errSwitchFailed', err.message);
