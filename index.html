@@ -831,31 +831,46 @@ void main() {
         return N * N * C_EMP * 1e6 / (E_OVERWHELM * iso);
       },
 
-      getETFromSlider() {
-        if (!this.caps?.exposureTime) return 0;
-        const val = parseInt(this.etSlider.value);
+      /** Effective slider <-> ET log-space range. Slider runs 1..100 (linear). */
+      getETSliderRange() {
         const { min, max } = this.caps.exposureTime;
-        const etFloor = this.getETFloor();
-        const effectiveMin = Math.min(Math.max(min, etFloor), max);
-        const logMin = Math.log(effectiveMin);
-        const logMax = Math.log(max);
-        const t = (val - 1) / 99;
-        return Math.max(min, Math.min(max,
-          Math.round(Math.exp(logMin + t * (logMax - logMin)))));
+        const effectiveMin = Math.min(Math.max(min, this.getETFloor()), max);
+        return { min, max, logMin: Math.log(effectiveMin), logMax: Math.log(max) };
       },
 
-      async applyET() {
-        if (!this.track || !this.caps?.exposureTime) return;
-        const et = this.getETFromSlider();
+      getETFromSlider() {
+        if (!this.caps?.exposureTime) return 0;
+        const { min, max, logMin, logMax } = this.getETSliderRange();
+        const t = (parseInt(this.etSlider.value, 10) - 1) / 99;
+        const et = Math.round(Math.exp(logMin + t * (logMax - logMin)));
+        return Math.max(min, Math.min(max, et));
+      },
+
+      syncSliderToET(et) {
+        if (!this.caps?.exposureTime) return;
+        const { min, max, logMin, logMax } = this.getETSliderRange();
+        if (logMax <= logMin) { this.etSlider.value = 1; return; }
+        const clamped = Math.max(Math.exp(logMin), Math.min(max, et));
+        const t = (Math.log(clamped) - logMin) / (logMax - logMin);
+        this.etSlider.value = Math.round(1 + t * 99);
+      },
+
+      /** Send a manual ET (and ISO when supported) to the camera. Tracks an
+       *  in-flight flag so callers can avoid stacking constraint calls. */
+      sendManualET(et, label) {
         this.manualET = et;
         this.etVal.textContent = et + '\xB5s';
         const constraint = { exposureMode: 'manual', exposureTime: et };
         if (this.supportsISO) constraint.iso = this.getFixedISO();
-        try {
-          await this.track.applyConstraints({ advanced: [constraint] });
-        } catch (e) {
-          console.warn('Manual ET failed:', e);
-        }
+        this._etApplyPending = true;
+        return this.track.applyConstraints({ advanced: [constraint] })
+          .catch(e => console.warn(label + ' failed:', e))
+          .finally(() => { this._etApplyPending = false; });
+      },
+
+      async applyET() {
+        if (!this.track || !this.caps?.exposureTime) return;
+        await this.sendManualET(this.getETFromSlider(), 'Manual ET');
       },
 
       autoAdjustET(measured) {
@@ -865,31 +880,11 @@ void main() {
         const etFloor = Math.max(min, this.getETFloor());
         const currentET = this.manualET || etFloor;
         const ratio = this.AE_TARGET / Math.max(measured, 0.001);
-        const logCurrent = Math.log(currentET);
-        const logTarget = Math.log(Math.max(etFloor, Math.min(max, currentET * ratio)));
-        const logNew = logCurrent + this.AE_DAMPING * (logTarget - logCurrent);
+        const targetET = Math.max(etFloor, Math.min(max, currentET * ratio));
+        const logNew = Math.log(currentET) + this.AE_DAMPING * (Math.log(targetET) - Math.log(currentET));
         const newET = Math.max(etFloor, Math.min(max, Math.round(Math.exp(logNew))));
-        this.manualET = newET;
-        this.etVal.textContent = newET + '\xB5s';
         this.syncSliderToET(newET);
-        this._etApplyPending = true;
-        const constraint = { exposureMode: 'manual', exposureTime: newET };
-        if (this.supportsISO) constraint.iso = this.getFixedISO();
-        this.track.applyConstraints({ advanced: [constraint] })
-          .catch(e => console.warn('Auto ET failed:', e))
-          .finally(() => { this._etApplyPending = false; });
-      },
-
-      syncSliderToET(et) {
-        if (!this.caps?.exposureTime) return;
-        const { min, max } = this.caps.exposureTime;
-        const etFloor = this.getETFloor();
-        const effectiveMin = Math.min(Math.max(min, etFloor), max);
-        const logMin = Math.log(effectiveMin);
-        const logMax = Math.log(max);
-        if (logMax <= logMin) { this.etSlider.value = 1; return; }
-        const t = (Math.log(Math.max(effectiveMin, Math.min(max, et))) - logMin) / (logMax - logMin);
-        this.etSlider.value = Math.round(1 + t * 99);
+        this.sendManualET(newET, 'Auto ET');
       },
 
       applyETUIState() {
