@@ -143,6 +143,7 @@
   <div class="controls">
     <button type="button" id="btn-gray" class="pill on" aria-pressed="true" title="Turn off to see the camera in full color">Grayscale</button>
     <button type="button" id="btn-blur" class="pill on" aria-pressed="true">Blur</button>
+    <button type="button" id="btn-freeze" class="pill" aria-pressed="false" title="Freeze the current frame">Freeze</button>
     <button type="button" id="btn-et" class="pill on hidden" aria-pressed="true" title="Simulates glare / photophobia in bright conditions">Glare</button>
     <button type="button" id="btn-fs" class="pill hidden" aria-pressed="false" title="Toggle fullscreen mode">Fullscreen</button>
     <button type="button" id="btn-settings" class="pill pill-gear" aria-pressed="false" aria-haspopup="true" aria-expanded="false" title="Settings">&#x2699;</button>
@@ -282,6 +283,8 @@ void main() {
         grayscale: 'Grayscale',
         grayscaleTitle: 'Turn off to see the camera in full color',
         blur: 'Blur',
+        freeze: 'Freeze',
+        freezeTitle: 'Freeze the current frame',
         glare: 'Glare',
         glareTitle: 'Simulates glare / photophobia in bright conditions',
         settingsTitle: 'Settings',
@@ -308,6 +311,8 @@ void main() {
         grayscale: 'Stupně šedi',
         grayscaleTitle: 'Vypněte pro barevný obraz z kamery',
         blur: 'Rozmazání',
+        freeze: 'Zmrazit',
+        freezeTitle: 'Zmrazit aktuální snímek',
         glare: 'Oslnění',
         glareTitle: 'Simuluje oslnění při jasném osvětlení',
         settingsTitle: 'Nastavení',
@@ -377,6 +382,7 @@ void main() {
       etVal: document.getElementById('et-val'),
       grayModeSelect: document.getElementById('gray-mode'),
       btnBlur: document.getElementById('btn-blur'),
+      btnFreeze: document.getElementById('btn-freeze'),
       blurRow: document.getElementById('blur-row'),
       blurSlider: document.getElementById('blur-slider'),
       blurVal: document.getElementById('blur-val'),
@@ -407,6 +413,7 @@ void main() {
       manualET: null,
       blurOn: true,
       blurVA: 0.10,
+      frozen: false,
       settingsOpen: false,
       cameras: [],
       cameraIndex: -1,
@@ -694,7 +701,7 @@ void main() {
           }
         }
 
-        this.rafId = requestAnimationFrame(() => this.processFrame());
+        if (!this.frozen) this.rafId = requestAnimationFrame(() => this.processFrame());
       },
 
       /** Draw the current video texture to the screen, applying grayscale
@@ -1063,11 +1070,13 @@ void main() {
       toggleGrayscale() {
         this.grayscaleOn = !this.grayscaleOn;
         this.setPillState(this.btnGray, this.grayscaleOn);
+        this.renderFrame();
         this.persistPrefs();
       },
 
       onGrayModeChange() {
         this.grayMode = this.grayModeSelect.value;
+        this.renderFrame();
         this.persistPrefs();
       },
 
@@ -1075,13 +1084,25 @@ void main() {
         this.blurOn = !this.blurOn;
         this.setPillState(this.btnBlur, this.blurOn);
         this.blurRow.style.display = this.blurOn ? 'flex' : 'none';
+        this.renderFrame();
         this.persistPrefs();
       },
 
       onBlurChange() {
         this.blurVA = parseInt(this.blurSlider.value, 10) / 1000;
         this.blurVal.textContent = this.blurVA.toFixed(3);
+        this.renderFrame();
         this.persistPrefs();
+      },
+
+      toggleFreeze() {
+        this.frozen = !this.frozen;
+        this.setPillState(this.btnFreeze, this.frozen);
+        if (this.frozen) {
+          if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = null; }
+        } else {
+          this.processFrame();
+        }
       },
 
       getBlurSigma() {
@@ -1155,6 +1176,8 @@ void main() {
         this.btnGray.textContent = t.grayscale;
         this.btnGray.title = t.grayscaleTitle;
         this.btnBlur.textContent = t.blur;
+        this.btnFreeze.textContent = t.freeze;
+        this.btnFreeze.title = t.freezeTitle;
         this.btnET.textContent = t.glare;
         this.btnET.title = t.glareTitle;
         this.btnFS.textContent = t.fullscreen;
@@ -1259,6 +1282,7 @@ void main() {
     sim.btnGray.addEventListener('click', () => sim.toggleGrayscale());
     sim.btnET.addEventListener('click', () => sim.toggleET());
     sim.btnBlur.addEventListener('click', () => sim.toggleBlur());
+    sim.btnFreeze.addEventListener('click', () => sim.toggleFreeze());
     sim.btnFS.addEventListener('click', () => sim.toggleFullscreen());
     sim.btnSettings.addEventListener('click', () => sim.toggleSettings());
     sim.camSelect.addEventListener('change', () => sim.onCameraSelectChange());
