@@ -27,12 +27,15 @@ Controls are anchored top-right unless noted.
   if the camera exposes `iso` in capabilities, **ISO is fixed at 400** (clamped
   to the hardware min/max) on every `applyConstraints` call — there is no ISO
   slider.
-- **Fullscreen**: Shown only when the browser supports the Fullscreen API
-  (`document.fullscreenEnabled`). Toggles browser fullscreen mode, hiding
-  the URL bar and system navigation for a full edge-to-edge viewfinder.
-  Syncs state via `fullscreenchange` events, so the button reflects the
-  actual state even when the user exits fullscreen via system gesture.
-  Hidden on iOS Safari (which only supports fullscreen on `<video>` elements).
+- **Fullscreen**: Shown only when the browser reports the Fullscreen API
+  as enabled (`document.fullscreenEnabled || document.webkitFullscreenEnabled`).
+  Toggles browser fullscreen mode, hiding the URL bar and system navigation
+  for a full edge-to-edge viewfinder. Syncs state via `fullscreenchange`
+  events, so the button reflects the actual state even when the user exits
+  fullscreen via system gesture. iOS Safari does not enable element
+  fullscreen on the `<html>` element (it only supports fullscreen on
+  `<video>` elements), so the capability check returns false there and the
+  pill stays hidden — no explicit iOS UA sniff needed.
 - **Settings** (gear): Opens a panel below the gear with:
   - **Grayscale type**: Dropdown — **Science-based** (scotopic / rod-weighted
     luminance in the shader) vs **Plain B&W** (Rec. 601) when grayscale is on.
