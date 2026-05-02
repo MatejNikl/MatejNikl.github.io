@@ -1041,12 +1041,18 @@ void main() {
       },
 
       toggleFullscreen() {
-        if (this.isFullscreen()) {
-          (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-        } else {
-          const el = document.documentElement;
-          (el.requestFullscreen || el.webkitRequestFullscreen).call(el).catch(() => {});
-        }
+        try {
+          if (this.isFullscreen()) {
+            const exit = document.exitFullscreen || document.webkitExitFullscreen;
+            const result = exit.call(document);
+            if (result && typeof result.catch === 'function') result.catch(() => {});
+          } else {
+            const el = document.documentElement;
+            const request = el.requestFullscreen || el.webkitRequestFullscreen;
+            const result = request.call(el);
+            if (result && typeof result.catch === 'function') result.catch(() => {});
+          }
+        } catch (e) { /* old WebKit may throw synchronously */ }
       },
 
       toggleSettings() {
