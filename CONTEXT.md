@@ -19,6 +19,18 @@ Controls are anchored top-right unless noted.
 - **Blur**: Toggles the acuity simulation. When on, a **Sharpness** slider appears at
   the bottom (still driven by visual acuity internally, e.g. 0.10 ≈ 20/200 — higher
   value means sharper / less blur).
+- **Freeze**: Pauses the render loop on the current frame. Toggling Grayscale,
+  Grayscale type, Blur, or the Sharpness slider while frozen redraws the held
+  frame immediately — Glare changes still talk to the camera but do not affect
+  the held image. Tap again to resume the live feed.
+- **Photo**: Captures the current canvas (live or frozen) to a PNG and offers it
+  via the Web Share API where available, falling back to a hidden `<a download>`
+  click. Filename is `achromat-YYYY-MM-DD_HH-MM-SS.png`.
+- **Record**: Toggles a `MediaRecorder` on `canvas.captureStream(30)`. While
+  recording, a small red-dot + `mm:ss` indicator appears top-left and the pill
+  changes to **Stop**. Stopping triggers the same share-or-download path used
+  for photos. Hidden when `MediaRecorder` or `HTMLCanvasElement.captureStream`
+  is unavailable.
 - **Glare**: Shown only when `getCapabilities()` reports `exposureMode`
   including `manual` and an `exposureTime` range. **On by default** with
   **software auto-exposure** enabled — the app measures average frame brightness
@@ -140,24 +152,106 @@ coefficients avoid negative weights and are better supported by research.
 ## Visual acuity blur
 
 Complete achromatopsia typically gives visual acuity of ~20/200 (VA 0.10). The
-blur is simulated with a Gaussian via CSS `filter: blur(σpx)` on the canvas
-element.
+blur is simulated with a Gaussian implemented as a two-pass separable shader
+on the GPU.
 
 The blur sigma formula is `(1/VA - 1) * K` where `K = 0.3`. This maps VA 1.0 to
 zero blur and increases as VA decreases. The constant K was calibrated considering
 that convolved blur appears ~26% more degraded than equivalent natural optical
 blur (Artal et al.), so K was reduced from 0.4 to 0.3 to compensate.
 
-### Why CSS filter instead of ctx.filter?
+### Why a shader-based separable Gaussian?
+
+The earlier implementation applied `filter: blur()` to the `<canvas>` element
+in CSS. That worked fine on screen but lived purely in the browser's
+compositor — `canvas.toBlob` and `canvas.captureStream` see only the WebGL
+drawing buffer, so any saved photo or recorded frame would be missing the
+blur. Moving the blur into the GL pipeline keeps capture honest and gives
+deterministic quality across browsers (CSS `blur()` is implementation-defined,
+especially at the lower end of the radius range).
+
+The pipeline is now:
+
+```
+videoTex --(passA: grayscale + horizontal blur)--> blurFboH
+blurFboH --(passB: vertical blur)--> default framebuffer (screen)
+```
+
+Both passes run the same fragment shader (`BLUR_FRAG_SRC`) — a `uPass`-style
+distinction is made via `uGrayscale` (only true in pass A) and a `uFlipY`
+flag that flips the v axis for the upside-down video texture but not for the
+already-canvas-oriented intermediate FBO. When **Blur is off** the shader
+short-circuits to a single center sample (`uSigma == 0` branch) and we skip
+pass B entirely, drawing pass A straight to the default framebuffer.
+
+The kernel is a 9-tap unit-sigma Gaussian sampled at offsets `±0..±4` with
+weights `{0.0001, 0.0044, 0.0540, 0.2420, 0.3989, …}` (normalised). The actual
+sample step is `uTexelStep * uSigma`, so the same shader covers the full VA
+slider range without recompiling — at small sigma the taps land within a
+pixel and bilinear filtering does the work; at large sigma (up to ~6 px at
+VA 0.05) the taps spread out and the kernel approximates a wider Gaussian
+with a small loss of fidelity that's invisible at typical viewing distance.
+
+### Why not `ctx.filter`?
 
 `CanvasRenderingContext2D.filter` is **disabled by default** in Safari/WebKit on
 all iOS versions (including the latest 26.x), despite the feature being
 implemented. Apple keeps it behind a feature flag. Since all iOS browsers use
-WebKit, `ctx.filter` is silently ignored on every iOS browser.
+WebKit, `ctx.filter` is silently ignored on every iOS browser, ruling it out as
+a portable alternative regardless of the capture concern above.
 
-CSS `filter: blur()` on the `<canvas>` HTML element works on all browsers since
-Safari 6 (2012). It applies after canvas rendering, which is fine since the blur
-doesn't need to feed back into the pixel processing.
+## Saving photos and recording video
+
+The **Photo** and **Record** pills both produce a `Blob` and hand it to a single
+`shareBlob(blob, filename)` helper that:
+
+1. Tries `navigator.canShare({ files: [...] })` and, if true, calls
+   `navigator.share({ files: [...] })`. User cancellation (`AbortError`) is
+   treated as success.
+2. Otherwise creates an object URL, programmatically clicks a hidden
+   `<a download>`, and revokes the URL on the next tick.
+
+This works on iOS Safari 15+ and Android Chrome (Web Share with files),
+desktop Safari/Edge (most cases), and falls back to a download on Firefox
+desktop.
+
+### Photo: re-render-then-capture
+
+The WebGL context is created **without** `preserveDrawingBuffer`, so the back
+buffer is not guaranteed to survive past the current task — by the time a
+click handler fires, the live render loop's last draw may already have been
+swapped out. `savePhoto()` therefore calls `renderFrame()` synchronously
+before `canvas.toBlob`, which guarantees fresh contents for the encoder
+without paying the per-frame copy cost of `preserveDrawingBuffer` for the
+99 % of the time when nobody is capturing. The output is PNG (lossless) since
+the grayscale + blur combination is dominated by smooth gradients that JPEG
+would mangle.
+
+### Video: MediaRecorder on canvas.captureStream
+
+`canvas.captureStream(30)` provides the video track; recording is
+**video-only** for v1 since `getUserMedia` was opened with `video:` only.
+`pickRecordingMime()` probes `MediaRecorder.isTypeSupported` in priority
+order — `video/mp4;codecs=h264` (required on iOS Safari 15+),
+`video/webm;codecs=vp9`, `video/webm;codecs=vp8`, then plain `video/webm` as
+a last resort — and the file extension follows. The pill is hidden up front
+when either `MediaRecorder` or `HTMLCanvasElement.prototype.captureStream` is
+unavailable.
+
+A small `setInterval` updates the `mm:ss` indicator once per second; the
+indicator dot blinks via CSS animation. A 5-minute soft cap on
+`setTimeout` prevents the in-memory chunk array from ballooning during
+unattended recordings; hitting the cap shows a localised toast and
+finalises the video the same way a manual stop would.
+
+### Visibility-hidden interaction
+
+`suspend()` (called on `visibilitychange` when the page is hidden) auto-stops
+any in-progress recording **before** it tears the camera stream down,
+otherwise the chunks captured between the last `dataavailable` and the
+camera shutdown would be lost. The freeze state, by contrast, is left as the
+user set it; on `resume()` the next `processFrame()` draws a fresh frame and
+the user can re-freeze if they want.
 
 ## Camera resolution
 

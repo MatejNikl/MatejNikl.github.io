@@ -39,16 +39,6 @@ or Dynamic Island in landscape on recent iPhones / Pixels. Add
 `viewport-fit=cover` to the viewport meta and offset controls with
 `env(safe-area-inset-*)`. Trivial CSS-only change.
 
-### Snapshot / freeze-frame — impact ★★★ · effort ★★
-
-Tap a "Freeze" pill (or the canvas itself) to stop the rAF loop and
-hold the current frame. Lets the demonstrator say "look at *this*
-specific scene" without scene motion confusing the comparison. The
-existing `processFrame()` already cancels its prior `rafId` on
-re-entry, so wiring a paused state is mostly UI work. Pair with a
-"Save image" affordance via `canvas.toBlob()` for a free shareable
-still.
-
 ### Info / about overlay — impact ★★ · effort ★★
 
 A small `(i)` pill (or a tap on the title) that opens a dismissible
@@ -191,15 +181,6 @@ field. Zero impact when the param isn't set.
 
 ## Technical / robustness
 
-### Video recording / export — impact ★★ · effort ★★
-
-`MediaRecorder` on `canvas.captureStream()` can produce a short clip
-of the simulated view, which the parent can share with somebody who
-isn't physically present ("this is what he sees in your
-classroom"). Needs care to size the recording to a reasonable
-duration/bitrate and to expose a clean download or Web Share Target
-fallback.
-
 ### `display_override` and richer manifest — impact ★ · effort ★
 
 Add `"display_override": ["fullscreen", "standalone", "minimum-ui"]`
@@ -252,3 +233,15 @@ For the historical record, these earlier ideas have shipped:
 - **Accessibility: ARIA on pills** — pills are now real `<button>`
   elements with `aria-pressed`, `aria-expanded`, locale-aware
   `aria-label` on the gear, and a `:focus-visible` outline.
+- **Snapshot / freeze-frame** — Freeze pill cancels the rAF loop and
+  redraws the held frame on Grayscale / Blur / Sharpness changes.
+- **Save photo** — Photo pill uses `canvas.toBlob` and the Web Share
+  API (with `<a download>` fallback). The blur is rendered into the
+  WebGL drawing buffer so it shows up in the saved PNG.
+- **Video recording / export** — Record pill uses `MediaRecorder` on
+  `canvas.captureStream(30)`, with a mime probe (mp4/h264 → vp9/webm
+  → vp8/webm), a 5-minute soft cap, and the same share-or-download
+  finishing path as photos. Auto-stops on visibility-hidden.
+- **Move blur to a shader pass** — replaced the CSS `filter: blur()`
+  with a two-pass separable Gaussian shader. Required prerequisite
+  for the photo / video items above.
