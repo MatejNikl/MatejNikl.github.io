@@ -317,17 +317,6 @@ void main() {
       catch (e) { /* private mode */ }
     }
 
-    function pickLocale() {
-      const list = (navigator.languages && navigator.languages.length)
-        ? [...navigator.languages]
-        : [navigator.language || 'en'];
-      for (const tag of list) {
-        const base = String(tag).split('-')[0].toLowerCase();
-        if (base === 'cs') return 'cs';
-      }
-      return 'en';
-    }
-
     function readLocaleOverride() {
       try {
         const v = localStorage.getItem(LOCALE_STORAGE_KEY);
@@ -339,7 +328,9 @@ void main() {
     function getEffectiveLocale() {
       const override = readLocaleOverride();
       if (override) return override;
-      return pickLocale();
+      const tags = navigator.languages?.length ? navigator.languages : [navigator.language || 'en'];
+      const wantsCs = tags.some(tag => String(tag).split('-')[0].toLowerCase() === 'cs');
+      return wantsCs ? 'cs' : 'en';
     }
 
     const sim = {
@@ -389,7 +380,6 @@ void main() {
       cameras: [],
       cameraIndex: -1,
       _preferredCameraDeviceId: null,
-      locale: 'en',
       strings: I18N.en,
       dsProgram: null,
       dsAPos: -1,
@@ -809,7 +799,7 @@ void main() {
       },
 
       onCameraSelectChange() {
-        const idx = parseInt(this.camSelect.value);
+        const idx = parseInt(this.camSelect.value, 10);
         if (idx !== this.cameraIndex) this.switchCamera(idx);
       },
 
@@ -979,7 +969,7 @@ void main() {
       },
 
       onBlurChange() {
-        this.blurVA = parseInt(this.blurSlider.value) / 1000;
+        this.blurVA = parseInt(this.blurSlider.value, 10) / 1000;
         this.blurVal.textContent = this.blurVA.toFixed(3);
         this.updateBlurCSS();
         this.persistPrefs();
@@ -1058,10 +1048,9 @@ void main() {
 
       applyLocale() {
         const effective = getEffectiveLocale();
-        this.locale = effective;
         this.strings = I18N[effective] || I18N.en;
         const t = this.strings;
-        document.documentElement.lang = effective === 'cs' ? 'cs' : 'en';
+        document.documentElement.lang = effective;
         document.title = t.title;
         this.btnGray.textContent = t.grayscale;
         this.btnGray.title = t.grayscaleTitle;
