@@ -748,17 +748,17 @@ void main() {
         this.cameraIndex = this.cameras.findIndex(c => c.deviceId === currentId);
         if (this.cameraIndex === -1) this.cameraIndex = 0;
 
+        if (this.cameras.length > 1) {
+          this.camRow.style.display = 'flex';
+          this.populateCameraSelect();
+        }
+
         let targetIndex = 0;
         if (this._preferredCameraDeviceId) {
           const prefIdx = this.cameras.findIndex(c => c.deviceId === this._preferredCameraDeviceId);
           if (prefIdx !== -1) targetIndex = prefIdx;
         }
         if (this.cameraIndex !== targetIndex) await this.switchCamera(targetIndex);
-
-        if (this.cameras.length > 1) {
-          this.camRow.style.display = 'flex';
-          this.populateCameraSelect();
-        }
       },
 
       populateCameraSelect() {
