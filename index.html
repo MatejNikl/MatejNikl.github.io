@@ -189,11 +189,18 @@ void main() {
     gl_Position = vec4(aPos, 0.0, 1.0);
 }`;
 
-    const FRAG_SRC = `
+    // Separable Gaussian blur with grayscale folded into pass A.
+    // 9-tap unit-sigma kernel scaled by uSigma (in pixels) along uTexelStep,
+    // so a single shader handles the full VA range without recompiling.
+    // Outer-tap weights are tiny but kept for symmetry / branch-free unroll.
+    const BLUR_FRAG_SRC = `
 precision mediump float;
-uniform sampler2D uVideo;
+uniform sampler2D uSrc;
+uniform vec2 uTexelStep;
+uniform float uSigma;
 uniform bool uGrayscale;
 uniform int uGrayMode;
+uniform bool uFlipY;
 varying vec2 vTexCoord;
 
 vec3 srgbToLinear(vec3 c) {
@@ -208,22 +215,42 @@ float linearToSrgb(float c) {
     return mix(lo, hi, step(0.0031308, c));
 }
 
-void main() {
-    vec2 uv = vec2(vTexCoord.x, 1.0 - vTexCoord.y);
-    vec4 color = texture2D(uVideo, uv);
-
+vec4 sampleSrc(vec2 uv) {
+    vec4 c = texture2D(uSrc, uv);
     if (uGrayscale) {
         float lum;
         if (uGrayMode == 0) {
-            vec3 lin = srgbToLinear(color.rgb);
+            vec3 lin = srgbToLinear(c.rgb);
             lum = linearToSrgb(dot(lin, vec3(0.007, 0.519, 0.474)));
         } else {
-            lum = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+            lum = dot(c.rgb, vec3(0.299, 0.587, 0.114));
         }
-        color = vec4(vec3(lum), 1.0);
+        c = vec4(vec3(lum), 1.0);
+    }
+    return c;
+}
+
+void main() {
+    vec2 uv = vTexCoord;
+    if (uFlipY) uv.y = 1.0 - uv.y;
+
+    if (uSigma <= 0.0) {
+        gl_FragColor = sampleSrc(uv);
+        return;
     }
 
-    gl_FragColor = color;
+    vec2 d = uTexelStep * uSigma;
+    vec4 sum = vec4(0.0);
+    sum += sampleSrc(uv - d * 4.0) * 0.0001338;
+    sum += sampleSrc(uv - d * 3.0) * 0.004432;
+    sum += sampleSrc(uv - d * 2.0) * 0.05399;
+    sum += sampleSrc(uv - d       ) * 0.2420;
+    sum += sampleSrc(uv           ) * 0.3989;
+    sum += sampleSrc(uv + d       ) * 0.2420;
+    sum += sampleSrc(uv + d * 2.0) * 0.05399;
+    sum += sampleSrc(uv + d * 3.0) * 0.004432;
+    sum += sampleSrc(uv + d * 4.0) * 0.0001338;
+    gl_FragColor = sum;
 }`;
 
     const DS_FRAG_SRC = `
@@ -361,10 +388,11 @@ void main() {
       track: null,
       rafId: null,
       gl: null,
-      glProgram: null,
-      glUniforms: null,
+      blurProgram: null,
+      blurUniforms: null,
+      blurAPos: -1,
+      blurFboH: null,
       glTexture: null,
-      glAPos: -1,
       texSourceCanvas: null,
       texSourceCtx: null,
       useCanvasWorkaround: false,
@@ -414,7 +442,7 @@ void main() {
         }
 
         const fs = gl.createShader(gl.FRAGMENT_SHADER);
-        gl.shaderSource(fs, FRAG_SRC);
+        gl.shaderSource(fs, BLUR_FRAG_SRC);
         gl.compileShader(fs);
         if (!gl.getShaderParameter(fs, gl.COMPILE_STATUS)) {
           console.error('Fragment shader:', gl.getShaderInfoLog(fs));
@@ -429,13 +457,16 @@ void main() {
           console.error('Program link:', gl.getProgramInfoLog(prog));
           return false;
         }
-        this.glProgram = prog;
+        this.blurProgram = prog;
         gl.useProgram(prog);
 
-        this.glUniforms = {
-          uVideo: gl.getUniformLocation(prog, 'uVideo'),
+        this.blurUniforms = {
+          uSrc: gl.getUniformLocation(prog, 'uSrc'),
+          uTexelStep: gl.getUniformLocation(prog, 'uTexelStep'),
+          uSigma: gl.getUniformLocation(prog, 'uSigma'),
           uGrayscale: gl.getUniformLocation(prog, 'uGrayscale'),
           uGrayMode: gl.getUniformLocation(prog, 'uGrayMode'),
+          uFlipY: gl.getUniformLocation(prog, 'uFlipY'),
         };
 
         const quad = new Float32Array([-1,-1, 1,-1, -1,1, 1,1]);
@@ -445,7 +476,7 @@ void main() {
         const aPos = gl.getAttribLocation(prog, 'aPos');
         gl.enableVertexAttribArray(aPos);
         gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
-        this.glAPos = aPos;
+        this.blurAPos = aPos;
 
         const tex = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -455,7 +486,7 @@ void main() {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         this.glTexture = tex;
 
-        gl.uniform1i(this.glUniforms.uVideo, 0);
+        gl.uniform1i(this.blurUniforms.uSrc, 0);
 
         this.initDownsamplePipeline(gl);
 
@@ -464,12 +495,15 @@ void main() {
           this.canvas.addEventListener('webglcontextlost', (e) => {
             e.preventDefault();
             if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = null; }
+            this.blurFboH = null;
+            this.dsChain = [];
           });
           this.canvas.addEventListener('webglcontextrestored', () => {
             this.initGL();
             if (this.video.readyState >= 2) {
               this.resetVideoTextureWorkaround();
               this.detectTexImageVideoSupport();
+              this.updateCanvasSize();
             }
             this.processFrame();
           });
@@ -503,6 +537,28 @@ void main() {
           uSrc: gl.getUniformLocation(prog, 'uSrc'),
           uSrcSize: gl.getUniformLocation(prog, 'uSrcSize'),
         };
+      },
+
+      buildBlurFbo(w, h) {
+        const gl = this.gl;
+        if (!gl) return;
+        if (this.blurFboH) {
+          gl.deleteTexture(this.blurFboH.tex);
+          gl.deleteFramebuffer(this.blurFboH.fbo);
+          this.blurFboH = null;
+        }
+        const tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        const fbo = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        this.blurFboH = { tex, fbo, w, h };
       },
 
       buildDSChain(w, h) {
@@ -570,6 +626,7 @@ void main() {
           this.texSourceCanvas.width = vw;
           this.texSourceCanvas.height = vh;
         }
+        this.buildBlurFbo(vw, vh);
         this.buildDSChain(vw, vh);
       },
 
@@ -613,9 +670,9 @@ void main() {
         const vw = this.canvas.width, vh = this.canvas.height;
         if (vw && vh) gl.viewport(0, 0, vw, vh);
         gl.useProgram(savedProg);
-        if (this.glAPos !== -1) {
-          gl.enableVertexAttribArray(this.glAPos);
-          gl.vertexAttribPointer(this.glAPos, 2, gl.FLOAT, false, 0, 0);
+        if (this.blurAPos !== -1) {
+          gl.enableVertexAttribArray(this.blurAPos);
+          gl.vertexAttribPointer(this.blurAPos, 2, gl.FLOAT, false, 0, 0);
         }
 
         return px[0] / 255;
@@ -627,12 +684,7 @@ void main() {
         if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = null; }
 
         this.uploadVideoTexture();
-
-        const u = this.glUniforms;
-        gl.uniform1i(u.uGrayscale, this.grayscaleOn ? 1 : 0);
-        gl.uniform1i(u.uGrayMode, this.grayMode === 'scotopic' ? 0 : 1);
-
-        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        this.renderFrame();
 
         if (this.etOn && this.autoET && this.supportsET) {
           if (++this.meterFrameCounter >= this.METER_EVERY_N) {
@@ -643,6 +695,55 @@ void main() {
         }
 
         this.rafId = requestAnimationFrame(() => this.processFrame());
+      },
+
+      /** Draw the current video texture to the screen, applying grayscale
+       *  and (optionally) a separable Gaussian blur. Reads from glTexture
+       *  (already uploaded by uploadVideoTexture) and leaves blurProgram
+       *  bound on exit so meterLuminance's save/restore stays cheap. */
+      renderFrame() {
+        const gl = this.gl;
+        if (!gl || gl.isContextLost() || !this.blurProgram) return;
+        const w = this.canvas.width, h = this.canvas.height;
+        if (!w || !h) return;
+
+        gl.useProgram(this.blurProgram);
+        if (this.blurAPos !== -1) {
+          gl.enableVertexAttribArray(this.blurAPos);
+          gl.vertexAttribPointer(this.blurAPos, 2, gl.FLOAT, false, 0, 0);
+        }
+
+        const u = this.blurUniforms;
+        const sigma = (this.blurOn && this.blurFboH) ? this.getBlurSigma() : 0;
+        const grayInt = this.grayscaleOn ? 1 : 0;
+        const grayMode = this.grayMode === 'scotopic' ? 0 : 1;
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, this.glTexture);
+        gl.uniform1i(u.uSrc, 0);
+        gl.uniform1i(u.uGrayscale, grayInt);
+        gl.uniform1i(u.uGrayMode, grayMode);
+        gl.uniform1i(u.uFlipY, 1);
+        gl.uniform1f(u.uSigma, sigma);
+        gl.uniform2f(u.uTexelStep, 1 / w, 0);
+
+        if (sigma > 0) {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurFboH.fbo);
+          gl.viewport(0, 0, w, h);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+          gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+          gl.viewport(0, 0, w, h);
+          gl.bindTexture(gl.TEXTURE_2D, this.blurFboH.tex);
+          gl.uniform1i(u.uGrayscale, 0);
+          gl.uniform1i(u.uFlipY, 0);
+          gl.uniform2f(u.uTexelStep, 0, 1 / h);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        } else {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+          gl.viewport(0, 0, w, h);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        }
       },
 
       async start() {
@@ -672,7 +773,6 @@ void main() {
         this.updateCanvasSize();
         this.resetVideoTextureWorkaround();
         this.detectTexImageVideoSupport();
-        this.updateBlurCSS();
         this.detectCapabilities();
         if (this.etOn && this.supportsET) await this.applyET();
       },
@@ -975,21 +1075,13 @@ void main() {
         this.blurOn = !this.blurOn;
         this.setPillState(this.btnBlur, this.blurOn);
         this.blurRow.style.display = this.blurOn ? 'flex' : 'none';
-        this.updateBlurCSS();
         this.persistPrefs();
       },
 
       onBlurChange() {
         this.blurVA = parseInt(this.blurSlider.value, 10) / 1000;
         this.blurVal.textContent = this.blurVA.toFixed(3);
-        this.updateBlurCSS();
         this.persistPrefs();
-      },
-
-      updateBlurCSS() {
-        this.canvas.style.filter = this.blurOn
-          ? 'blur(' + this.getBlurSigma().toFixed(2) + 'px)'
-          : 'none';
       },
 
       getBlurSigma() {
