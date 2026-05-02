@@ -276,24 +276,23 @@ void main() {
     // sigma at the level's resolution stays <= ~1.5 px, which keeps the
     // kernel half-width within MAX_BLUR_TAPS_HALF (6 -> 13 total taps
     // covering ~+/-4 sigma). Weights are baked in JS each time sigma
-    // changes and uploaded as a uniform array. uTaps controls how many
-    // of those weights are actually summed; outer entries beyond uTaps
-    // are zero in JS so the masking step inside the loop is purely a
-    // GPU-friendly multiply, not a branch on uniform data.
+    // changes and uploaded as a uniform array; entries past the per-
+    // sigma cutoff are zeroed so the corresponding tap pair contributes
+    // nothing. We always run the full unrolled loop -- the wasted work
+    // for zero weights is well below the noise floor at this kernel
+    // size, and avoiding a dynamic loop bound keeps the shader source
+    // and the host call site simpler.
     const MAX_BLUR_TAPS_HALF = 6;
-    const MAX_BLUR_TAPS = 2 * MAX_BLUR_TAPS_HALF + 1;
     const BLUR_FRAG_SRC = `
 precision mediump float;
 uniform sampler2D uSrc;
 uniform vec2 uTexelStep;
-uniform int uTaps;
 uniform float uWeights[${MAX_BLUR_TAPS_HALF + 1}];
 varying vec2 vTexCoord;
 
 void main() {
     vec4 sum = texture2D(uSrc, vTexCoord) * uWeights[0];
     for (int i = 1; i <= ${MAX_BLUR_TAPS_HALF}; i++) {
-        if (i > uTaps) break;
         float fi = float(i);
         sum += texture2D(uSrc, vTexCoord + uTexelStep * fi) * uWeights[i];
         sum += texture2D(uSrc, vTexCoord - uTexelStep * fi) * uWeights[i];
@@ -474,10 +473,8 @@ void main() {
       gl: null,
       prepProgram: null,
       prepUniforms: null,
-      prepAPos: -1,
       blurProgram: null,
       blurUniforms: null,
-      blurAPos: -1,
       blurMaxLevel: 4,
       blurSrcFbos: [],
       blurPingFbos: [],
@@ -514,7 +511,6 @@ void main() {
       _preferredCameraDeviceId: null,
       strings: I18N.en,
       dsProgram: null,
-      dsAPos: -1,
       dsUniforms: null,
       dsChain: [],
       meterFrameCounter: 0,
@@ -534,45 +530,32 @@ void main() {
         if (!gl) return false;
         this.gl = gl;
 
-        const vs = this._compileShader(gl, gl.VERTEX_SHADER, VERT_SRC, 'Vertex shader');
-        if (!vs) return false;
-        const prepFs = this._compileShader(gl, gl.FRAGMENT_SHADER, PREP_FRAG_SRC, 'Prep shader');
-        if (!prepFs) return false;
-        const blurFs = this._compileShader(gl, gl.FRAGMENT_SHADER, BLUR_FRAG_SRC, 'Blur shader');
-        if (!blurFs) return false;
-
-        const prepProg = this._linkProgram(gl, vs, prepFs, 'Prep program');
-        if (!prepProg) return false;
-        const blurProg = this._linkProgram(gl, vs, blurFs, 'Blur program');
-        if (!blurProg) return false;
-
-        this.prepProgram = prepProg;
-        this.blurProgram = blurProg;
-
-        this.prepUniforms = {
-          uSrc: gl.getUniformLocation(prepProg, 'uSrc'),
-          uGrayscale: gl.getUniformLocation(prepProg, 'uGrayscale'),
-          uGrayMode: gl.getUniformLocation(prepProg, 'uGrayMode'),
-          uFlipY: gl.getUniformLocation(prepProg, 'uFlipY'),
-        };
-        this.blurUniforms = {
-          uSrc: gl.getUniformLocation(blurProg, 'uSrc'),
-          uTexelStep: gl.getUniformLocation(blurProg, 'uTexelStep'),
-          uTaps: gl.getUniformLocation(blurProg, 'uTaps'),
-          uWeights: gl.getUniformLocation(blurProg, 'uWeights[0]'),
-        };
-
+        // One full-screen quad shared by every program; bound once and
+        // never rebound since nothing else touches ARRAY_BUFFER.
         const quad = new Float32Array([-1,-1, 1,-1, -1,1, 1,1]);
         const buf = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, buf);
         gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
-        this.prepAPos = gl.getAttribLocation(prepProg, 'aPos');
-        this.blurAPos = gl.getAttribLocation(blurProg, 'aPos');
 
-        gl.useProgram(prepProg);
-        gl.uniform1i(this.prepUniforms.uSrc, 0);
-        gl.useProgram(blurProg);
-        gl.uniform1i(this.blurUniforms.uSrc, 0);
+        const vs = this._compileShader(gl.VERTEX_SHADER, VERT_SRC, 'Vertex shader');
+        if (!vs) return false;
+
+        const prep = this._buildProgram(vs, PREP_FRAG_SRC, 'Prep',
+          ['uSrc', 'uGrayscale', 'uGrayMode', 'uFlipY']);
+        if (!prep) return false;
+        const blur = this._buildProgram(vs, BLUR_FRAG_SRC, 'Blur',
+          ['uSrc', 'uTexelStep', 'uWeights']);
+        if (!blur) return false;
+        const ds = this._buildProgram(vs, DS_FRAG_SRC, 'Downsample',
+          ['uSrc', 'uSrcSize']);
+        if (!ds) return false;
+
+        this.prepProgram = prep.program;
+        this.prepUniforms = prep.uniforms;
+        this.blurProgram = blur.program;
+        this.blurUniforms = blur.uniforms;
+        this.dsProgram = ds.program;
+        this.dsUniforms = ds.uniforms;
 
         const tex = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -581,8 +564,6 @@ void main() {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         this.glTexture = tex;
-
-        this.initDownsamplePipeline(gl);
 
         if (!this._glLifecycleBound) {
           this._glLifecycleBound = true;
@@ -607,7 +588,8 @@ void main() {
         return true;
       },
 
-      _compileShader(gl, type, src, label) {
+      _compileShader(type, src, label) {
+        const gl = this.gl;
         const sh = gl.createShader(type);
         gl.shaderSource(sh, src);
         gl.compileShader(sh);
@@ -618,43 +600,34 @@ void main() {
         return sh;
       },
 
-      _linkProgram(gl, vs, fs, label) {
-        const p = gl.createProgram();
-        gl.attachShader(p, vs);
-        gl.attachShader(p, fs);
-        gl.linkProgram(p);
-        if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
-          console.error(label + ' link:', gl.getProgramInfoLog(p));
+      /** Compile the fragment shader, link with the shared vertex shader,
+       *  fetch the requested uniform locations, wire the shared aPos
+       *  attribute to the already-bound quad buffer, and pre-set uSrc
+       *  to texture unit 0. Returns { program, uniforms } or null. */
+      _buildProgram(vs, fragSrc, label, uniformNames) {
+        const gl = this.gl;
+        const fs = this._compileShader(gl.FRAGMENT_SHADER, fragSrc, label + ' shader');
+        if (!fs) return null;
+        const program = gl.createProgram();
+        gl.attachShader(program, vs);
+        gl.attachShader(program, fs);
+        gl.linkProgram(program);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+          console.error(label + ' program link:', gl.getProgramInfoLog(program));
           return null;
         }
-        return p;
-      },
-
-      initDownsamplePipeline(gl) {
-        const vs = gl.createShader(gl.VERTEX_SHADER);
-        gl.shaderSource(vs, VERT_SRC);
-        gl.compileShader(vs);
-        const fs = gl.createShader(gl.FRAGMENT_SHADER);
-        gl.shaderSource(fs, DS_FRAG_SRC);
-        gl.compileShader(fs);
-        if (!gl.getShaderParameter(fs, gl.COMPILE_STATUS)) {
-          console.error('Downsample shader:', gl.getShaderInfoLog(fs));
-          return;
+        const uniforms = {};
+        for (const name of uniformNames) uniforms[name] = gl.getUniformLocation(program, name);
+        const aPos = gl.getAttribLocation(program, 'aPos');
+        if (aPos !== -1) {
+          gl.enableVertexAttribArray(aPos);
+          gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
         }
-        const prog = gl.createProgram();
-        gl.attachShader(prog, vs);
-        gl.attachShader(prog, fs);
-        gl.linkProgram(prog);
-        if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-          console.error('Downsample program link:', gl.getProgramInfoLog(prog));
-          return;
+        if (uniforms.uSrc) {
+          gl.useProgram(program);
+          gl.uniform1i(uniforms.uSrc, 0);
         }
-        this.dsProgram = prog;
-        this.dsAPos = gl.getAttribLocation(prog, 'aPos');
-        this.dsUniforms = {
-          uSrc: gl.getUniformLocation(prog, 'uSrc'),
-          uSrcSize: gl.getUniformLocation(prog, 'uSrcSize'),
-        };
+        return { program, uniforms };
       },
 
       /** Allocate two parallel FBO chains at full / half / quarter
@@ -782,19 +755,12 @@ void main() {
       meterLuminance() {
         const gl = this.gl;
         if (!this.dsProgram || !this.dsChain.length) return -1;
-        gl.useProgram(this.dsProgram);
-        gl.enableVertexAttribArray(this.dsAPos);
-        gl.vertexAttribPointer(this.dsAPos, 2, gl.FLOAT, false, 0, 0);
-        gl.uniform1i(this.dsUniforms.uSrc, 0);
 
         let srcTex = this.glTexture;
-        for (let i = 0; i < this.dsChain.length; i++) {
-          const level = this.dsChain[i];
-          gl.bindFramebuffer(gl.FRAMEBUFFER, level.fbo);
-          gl.viewport(0, 0, level.w, level.h);
-          gl.bindTexture(gl.TEXTURE_2D, srcTex);
-          gl.uniform2f(this.dsUniforms.uSrcSize, level.srcW, level.srcH);
-          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        for (const level of this.dsChain) {
+          this._drawQuad(this.dsProgram, srcTex, level.fbo, level.w, level.h, () => {
+            gl.uniform2f(this.dsUniforms.uSrcSize, level.srcW, level.srcH);
+          });
           srcTex = level.tex;
         }
 
@@ -804,8 +770,6 @@ void main() {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         const vw = this.canvas.width, vh = this.canvas.height;
         if (vw && vh) gl.viewport(0, 0, vw, vh);
-        // No need to restore the prep / blur program here; renderFrame
-        // is the only other consumer and it switches programs itself.
 
         return px[0] / 255;
       },
@@ -909,74 +873,62 @@ void main() {
         return level;
       },
 
-      _runPrep(srcTex, dstFbo, dstW, dstH, flipY) {
+      /** Draw the shared full-screen quad through `program` into `dstFbo`
+       *  (or the default framebuffer if null) at `dstW x dstH`. The
+       *  caller's `setUniforms` runs after the program is bound but
+       *  before the draw, so it can call gl.uniform* without worrying
+       *  about which program is active. uSrc is pre-bound to texture
+       *  unit 0 at link time. */
+      _drawQuad(program, srcTex, dstFbo, dstW, dstH, setUniforms) {
         const gl = this.gl;
-        gl.useProgram(this.prepProgram);
-        if (this.prepAPos !== -1) {
-          gl.enableVertexAttribArray(this.prepAPos);
-          gl.vertexAttribPointer(this.prepAPos, 2, gl.FLOAT, false, 0, 0);
-        }
-        const u = this.prepUniforms;
-        gl.uniform1i(u.uGrayscale, this.grayscaleOn ? 1 : 0);
-        gl.uniform1i(u.uGrayMode, this.grayMode === 'scotopic' ? 0 : 1);
-        gl.uniform1i(u.uFlipY, flipY ? 1 : 0);
+        gl.useProgram(program);
+        if (setUniforms) setUniforms();
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, srcTex);
         gl.bindFramebuffer(gl.FRAMEBUFFER, dstFbo);
         gl.viewport(0, 0, dstW, dstH);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      },
+
+      _runPrep(srcTex, dstFbo, dstW, dstH, flipY) {
+        const gl = this.gl, u = this.prepUniforms;
+        this._drawQuad(this.prepProgram, srcTex, dstFbo, dstW, dstH, () => {
+          gl.uniform1i(u.uGrayscale, this.grayscaleOn ? 1 : 0);
+          gl.uniform1i(u.uGrayMode, this.grayMode === 'scotopic' ? 0 : 1);
+          gl.uniform1i(u.uFlipY, flipY ? 1 : 0);
+        });
       },
 
       _runBlur(srcTex, dstFbo, dstW, dstH, sigma, horizontal) {
-        const gl = this.gl;
-        gl.useProgram(this.blurProgram);
-        if (this.blurAPos !== -1) {
-          gl.enableVertexAttribArray(this.blurAPos);
-          gl.vertexAttribPointer(this.blurAPos, 2, gl.FLOAT, false, 0, 0);
-        }
-        const u = this.blurUniforms;
-        const { weights, taps } = this._gaussianWeights(sigma);
-        gl.uniform1i(u.uTaps, taps);
-        gl.uniform1fv(u.uWeights, weights);
-        if (horizontal) {
-          gl.uniform2f(u.uTexelStep, 1 / dstW, 0);
-        } else {
-          gl.uniform2f(u.uTexelStep, 0, 1 / dstH);
-        }
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, srcTex);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, dstFbo);
-        gl.viewport(0, 0, dstW, dstH);
-        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        const gl = this.gl, u = this.blurUniforms;
+        const weights = this._gaussianWeights(sigma);
+        this._drawQuad(this.blurProgram, srcTex, dstFbo, dstW, dstH, () => {
+          gl.uniform1fv(u.uWeights, weights);
+          if (horizontal) gl.uniform2f(u.uTexelStep, 1 / dstW, 0);
+          else            gl.uniform2f(u.uTexelStep, 0, 1 / dstH);
+        });
       },
 
       /** Build one half of a normalised Gaussian kernel at unit pixel
-       *  spacing. w[0] is the center weight, w[1..taps] are the
-       *  off-center weights (the shader applies each to both the +i
-       *  and -i sample). taps is the largest k for which the unit-
-       *  Gaussian PDF is above a 1e-3 cutoff, clamped to
-       *  MAX_BLUR_TAPS_HALF; weights beyond taps are zeroed so a wider
-       *  uTaps wouldn't change the result. */
+       *  spacing. w[0] is the center weight, w[1..MAX_BLUR_TAPS_HALF]
+       *  are the off-center weights (the shader applies each to both
+       *  the +i and -i sample). Entries whose unit-Gaussian PDF falls
+       *  below a 1e-3 cutoff are zeroed so they contribute nothing
+       *  when the shader unrolls the full loop. */
       _gaussianWeights(sigma) {
         const max = MAX_BLUR_TAPS_HALF;
         const w = new Float32Array(max + 1);
         const cutoff = 1e-3;
         const inv2s2 = 1 / (2 * sigma * sigma);
-        let taps = 0;
         for (let i = 0; i <= max; i++) {
           const v = Math.exp(-(i * i) * inv2s2);
-          if (i === 0 || v >= cutoff) {
-            w[i] = v;
-            if (i > 0) taps = i;
-          } else {
-            break;
-          }
+          w[i] = (i === 0 || v >= cutoff) ? v : 0;
         }
         let sum = w[0];
-        for (let i = 1; i <= taps; i++) sum += 2 * w[i];
+        for (let i = 1; i <= max; i++) sum += 2 * w[i];
         const inv = 1 / sum;
         for (let i = 0; i <= max; i++) w[i] *= inv;
-        return { weights: w, taps };
+        return w;
       },
 
       async start() {

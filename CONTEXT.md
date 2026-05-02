@@ -212,15 +212,18 @@ Gaussian — center weight plus six off-center pairs. The host JS picks a
 `~1.5 px`, which keeps the kernel half-width within the shader's hard
 `MAX_BLUR_TAPS_HALF = 6` limit (covering `±4σ`, > 99.99 % of the kernel
 mass). Weights are baked in JS each frame from `σ_kernel` and uploaded as
-a `uniform float[7]`; a `uTaps` uniform tells the shader how many off-center
-samples to actually accumulate so we don't pay for taps whose weight is
-below a 1e-3 cutoff. For our slider range:
+a `uniform float[7]`; entries whose unit-Gaussian PDF falls below a 1e-3
+cutoff are zeroed in JS, so the shader can always run the full unrolled
+loop and the corresponding tap pairs just multiply-and-add zero. The
+wasted work for those zero weights is well below the noise floor at
+this kernel size, and avoiding a dynamic loop bound keeps both the
+shader source and the host call site simpler. For our slider range:
 
-| VA   | σ (full px) | level | σ at level | active taps |
-|------|-------------|-------|------------|-------------|
-| 0.30 | 0.7         | 0     | 0.7        | 2           |
-| 0.10 | 2.7         | 1     | 1.35       | 5           |
-| 0.05 | 5.7         | 2     | 1.425      | 5           |
+| VA   | σ (full px) | level | σ at level | non-zero taps |
+|------|-------------|-------|------------|---------------|
+| 0.30 | 0.7         | 0     | 0.7        | 2             |
+| 0.10 | 2.7         | 1     | 1.35       | 5             |
+| 0.05 | 5.7         | 2     | 1.425      | 5             |
 
 When **Blur is off** the entire FBO chain is skipped and the prep shader
 draws straight to the default framebuffer. That keeps the blur-off cost
