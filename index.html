@@ -1122,13 +1122,44 @@ void main() {
         }
       },
 
-      cleanup() {
+      /** Stop the render loop, release the camera, and drop the wake lock.
+       *  Called when the page is hidden and on unload. Safe to call repeatedly. */
+      suspend() {
         if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = null; }
-        if (this.stream) { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
-        this.track = null;
-        this.gl = null;
+        if (this.stream) {
+          this.stream.getTracks().forEach(t => t.stop());
+          this.stream = null;
+          this.track = null;
+          this.video.srcObject = null;
+        }
         this.releaseWakeLock();
-      }
+      },
+
+      /** Re-acquire the camera (preferring the previously-selected device) and
+       *  restart the render loop. No-op if already running. */
+      async resume() {
+        if (this.stream || this.rafId || this._resumePending) return;
+        this._resumePending = true;
+        try {
+          const deviceId = this.cameras[this.cameraIndex]?.deviceId;
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: deviceId
+              ? { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+              : { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
+          });
+          if (document.hidden) {
+            stream.getTracks().forEach(t => t.stop());
+            return;
+          }
+          await this.attachAndPrepareStream(stream);
+          this.processFrame();
+          this.acquireWakeLock();
+        } catch (err) {
+          if (!document.hidden) this.showError('errCameraFailed', err.message);
+        } finally {
+          this._resumePending = false;
+        }
+      },
     };
 
     sim.restorePrefs();
@@ -1160,40 +1191,10 @@ void main() {
       clearTimeout(resizeTimeout);
       resizeTimeout = setTimeout(() => sim.updateCanvasSize(), 100);
     });
-    window.addEventListener('unload', () => sim.cleanup());
-
-    document.addEventListener('visibilitychange', async () => {
-      if (document.hidden) {
-        if (sim.rafId) { cancelAnimationFrame(sim.rafId); sim.rafId = null; }
-        if (sim.stream) {
-          sim.stream.getTracks().forEach(t => t.stop());
-          sim.stream = null;
-          sim.track = null;
-          sim.video.srcObject = null;
-        }
-        sim.releaseWakeLock();
-      } else {
-        if (sim.stream || sim.rafId || sim._resumePending) return;
-        sim._resumePending = true;
-        try {
-          const deviceId = sim.cameras[sim.cameraIndex]?.deviceId;
-          const videoConstraints = deviceId
-            ? { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
-            : { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } };
-          const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
-          if (document.hidden) {
-            stream.getTracks().forEach(t => t.stop());
-            return;
-          }
-          await sim.attachAndPrepareStream(stream);
-          sim.processFrame();
-          sim.acquireWakeLock();
-        } catch (err) {
-          if (!document.hidden) sim.showError('errCameraFailed', err.message);
-        } finally {
-          sim._resumePending = false;
-        }
-      }
+    window.addEventListener('unload', () => sim.suspend());
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) sim.suspend();
+      else sim.resume();
     });
 
     sim.start();
