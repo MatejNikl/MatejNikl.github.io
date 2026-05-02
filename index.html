@@ -715,10 +715,7 @@ void main() {
           this.supportsISO = !!this.caps.iso;
         }
 
-        this.btnET.classList.toggle('hidden', !this.supportsET);
-        this.btnET.classList.toggle('on', this.supportsET && this.etOn);
-        this.etRow.style.display = (this.supportsET && this.etOn) ? 'flex' : 'none';
-        this.updateAutoIndicator();
+        this.applyETUIState();
 
         if (!this.supportsET) {
           this.manualET = null;
@@ -895,10 +892,12 @@ void main() {
         this.etSlider.value = Math.round(1 + t * 99);
       },
 
-      updateAutoIndicator() {
-        if (this.etAutoSpan) {
-          this.etAutoSpan.style.display = (this.etOn && this.autoET) ? '' : 'none';
-        }
+      applyETUIState() {
+        const visible = this.supportsET && this.etOn;
+        this.btnET.classList.toggle('hidden', !this.supportsET);
+        this.btnET.classList.toggle('on', visible);
+        this.etRow.style.display = visible ? 'flex' : 'none';
+        this.etAutoSpan.style.display = (visible && this.autoET) ? '' : 'none';
       },
 
       async resetExposure() {
@@ -916,19 +915,10 @@ void main() {
 
       async toggleET() {
         this.etOn = !this.etOn;
-        this.btnET.classList.toggle('on', this.etOn);
-        if (this.etOn) {
-          this.autoET = true;
-          this.meterFrameCounter = 0;
-          this.etRow.style.display = 'flex';
-          this.updateAutoIndicator();
-          await this.applyET();
-        } else {
-          this.autoET = false;
-          this.etRow.style.display = 'none';
-          this.updateAutoIndicator();
-          await this.resetExposure();
-        }
+        this.autoET = this.etOn;
+        if (this.etOn) this.meterFrameCounter = 0;
+        this.applyETUIState();
+        await (this.etOn ? this.applyET() : this.resetExposure());
         this.persistPrefs();
       },
 
@@ -1158,7 +1148,7 @@ void main() {
     sim.camSelect.addEventListener('change', () => sim.onCameraSelectChange());
     sim.etSlider.addEventListener('input', () => {
       sim.autoET = false;
-      sim.updateAutoIndicator();
+      sim.applyETUIState();
       sim.applyET();
     });
     sim.blurSlider.addEventListener('input', () => sim.onBlurChange());
