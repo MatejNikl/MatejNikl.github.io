@@ -25,6 +25,31 @@
       border-radius: 6px;
       display: none;
     }
+    #rec-indicator {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(0,0,0,0.6);
+      color: #fff;
+      font: 600 13px/1.2 system-ui, sans-serif;
+      padding: 6px 10px;
+      border-radius: 14px;
+      z-index: 10;
+    }
+    #rec-indicator[hidden] { display: none; }
+    .rec-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #ff3b30;
+      animation: rec-blink 1s steps(2, end) infinite;
+    }
+    @keyframes rec-blink {
+      to { opacity: 0.25; }
+    }
     .controls {
       position: absolute;
       top: 10px;
@@ -140,11 +165,16 @@
   <video id="video" autoplay playsinline muted></video>
   <canvas id="canvas"></canvas>
   <div id="error" role="alert"></div>
+  <div id="rec-indicator" role="status" aria-live="polite" hidden>
+    <span class="rec-dot" aria-hidden="true"></span>
+    <span id="rec-time">0:00</span>
+  </div>
   <div class="controls">
     <button type="button" id="btn-gray" class="pill on" aria-pressed="true" title="Turn off to see the camera in full color">Grayscale</button>
     <button type="button" id="btn-blur" class="pill on" aria-pressed="true">Blur</button>
     <button type="button" id="btn-freeze" class="pill" aria-pressed="false" title="Freeze the current frame">Freeze</button>
     <button type="button" id="btn-photo" class="pill" aria-pressed="false" title="Save the current frame as a photo">Photo</button>
+    <button type="button" id="btn-record" class="pill hidden" aria-pressed="false" title="Record video of the current view">Record</button>
     <button type="button" id="btn-et" class="pill on hidden" aria-pressed="true" title="Simulates glare / photophobia in bright conditions">Glare</button>
     <button type="button" id="btn-fs" class="pill hidden" aria-pressed="false" title="Toggle fullscreen mode">Fullscreen</button>
     <button type="button" id="btn-settings" class="pill pill-gear" aria-pressed="false" aria-haspopup="true" aria-expanded="false" title="Settings">&#x2699;</button>
@@ -288,6 +318,10 @@ void main() {
         freezeTitle: 'Freeze the current frame',
         photo: 'Photo',
         photoTitle: 'Save the current frame as a photo',
+        record: 'Record',
+        recordTitle: 'Record video of the current view',
+        recordStop: 'Stop',
+        recordStopTitle: 'Stop recording and save the video',
         glare: 'Glare',
         glareTitle: 'Simulates glare / photophobia in bright conditions',
         settingsTitle: 'Settings',
@@ -302,7 +336,10 @@ void main() {
         errCameraUnsupported: 'Camera access not supported. Try Chrome or Safari.',
         errCameraFailed: 'Camera failed: {0}',
         errSwitchFailed: 'Camera switch failed: {0}',
-        errShareFailed: 'Sharing the photo failed.',
+        errShareFailed: 'Sharing failed.',
+        errRecordingUnsupported: 'Video recording is not supported on this browser.',
+        errRecordingFailed: 'Recording failed: {0}',
+        recordingMaxLength: 'Recording reached the 5-minute limit and was saved.',
         langLabel: 'Language',
         langAuto: 'System default',
         langEn: 'English',
@@ -319,6 +356,10 @@ void main() {
         freezeTitle: 'Zmrazit aktuální snímek',
         photo: 'Foto',
         photoTitle: 'Uložit aktuální snímek jako fotografii',
+        record: 'Nahrát',
+        recordTitle: 'Nahrát video aktuálního pohledu',
+        recordStop: 'Stop',
+        recordStopTitle: 'Ukončit nahrávání a uložit video',
         glare: 'Oslnění',
         glareTitle: 'Simuluje oslnění při jasném osvětlení',
         settingsTitle: 'Nastavení',
@@ -333,7 +374,10 @@ void main() {
         errCameraUnsupported: 'Přístup ke kameře není podporován. Zkuste Chrome nebo Safari.',
         errCameraFailed: 'Kamera selhala: {0}',
         errSwitchFailed: 'Přepnutí kamery selhalo: {0}',
-        errShareFailed: 'Sdílení fotografie selhalo.',
+        errShareFailed: 'Sdílení selhalo.',
+        errRecordingUnsupported: 'Nahrávání videa není v tomto prohlížeči podporováno.',
+        errRecordingFailed: 'Nahrávání selhalo: {0}',
+        recordingMaxLength: 'Nahrávání dosáhlo 5minutového limitu a bylo uloženo.',
         langLabel: 'Jazyk',
         langAuto: 'Podle systému',
         langEn: 'Angličtina',
@@ -391,6 +435,9 @@ void main() {
       btnBlur: document.getElementById('btn-blur'),
       btnFreeze: document.getElementById('btn-freeze'),
       btnPhoto: document.getElementById('btn-photo'),
+      btnRecord: document.getElementById('btn-record'),
+      recIndicator: document.getElementById('rec-indicator'),
+      recTime: document.getElementById('rec-time'),
       blurRow: document.getElementById('blur-row'),
       blurSlider: document.getElementById('blur-slider'),
       blurVal: document.getElementById('blur-val'),
@@ -422,6 +469,15 @@ void main() {
       blurOn: true,
       blurVA: 0.10,
       frozen: false,
+      _mediaRecorder: null,
+      _recordingChunks: [],
+      _recordingMime: '',
+      _recordingExt: 'webm',
+      _recordingStartTs: 0,
+      _recordingTimerId: null,
+      _recordingMaxId: null,
+      _recordingHitCap: false,
+      RECORDING_MAX_MS: 5 * 60 * 1000,
       settingsOpen: false,
       cameras: [],
       cameraIndex: -1,
@@ -1135,6 +1191,125 @@ void main() {
           + '_' + pad(d.getHours()) + '-' + pad(d.getMinutes()) + '-' + pad(d.getSeconds());
       },
 
+      /** Reveal the Record pill if MediaRecorder + canvas.captureStream
+       *  are both supported. Pre-iOS-16.4 captureStream on WebGL canvases
+       *  is buggy; we surface that as an error on attempt rather than
+       *  trying to feature-detect the breakage up front. */
+      initRecording() {
+        const canRecord = typeof window.MediaRecorder !== 'undefined'
+          && typeof HTMLCanvasElement.prototype.captureStream === 'function';
+        if (!canRecord) return;
+        this.btnRecord.classList.remove('hidden');
+      },
+
+      /** Probe MediaRecorder for the best mime in our preferred order.
+       *  iOS Safari (15+) requires the mp4/h264 path; Android Chrome and
+       *  desktop Chromium typically take vp9/webm; vp8/webm is the
+       *  legacy fallback. Returns { mime, ext } or null if none match. */
+      pickRecordingMime() {
+        const candidates = [
+          { mime: 'video/mp4;codecs=h264', ext: 'mp4' },
+          { mime: 'video/webm;codecs=vp9', ext: 'webm' },
+          { mime: 'video/webm;codecs=vp8', ext: 'webm' },
+          { mime: 'video/webm', ext: 'webm' },
+        ];
+        for (const c of candidates) {
+          if (window.MediaRecorder.isTypeSupported(c.mime)) return c;
+        }
+        return { mime: '', ext: 'webm' };
+      },
+
+      toggleRecording() {
+        if (this._mediaRecorder && this._mediaRecorder.state === 'recording') {
+          this.stopRecording();
+        } else {
+          this.startRecording();
+        }
+      },
+
+      startRecording() {
+        if (!window.MediaRecorder || !this.canvas.captureStream) {
+          this.showError('errRecordingUnsupported');
+          return;
+        }
+        const picked = this.pickRecordingMime();
+        const stream = this.canvas.captureStream(30);
+        const opts = picked.mime
+          ? { mimeType: picked.mime, videoBitsPerSecond: 4_000_000 }
+          : { videoBitsPerSecond: 4_000_000 };
+        let recorder;
+        try {
+          recorder = new MediaRecorder(stream, opts);
+        } catch (e) {
+          this.showError('errRecordingFailed', e.message);
+          return;
+        }
+        this._mediaRecorder = recorder;
+        this._recordingChunks = [];
+        this._recordingMime = picked.mime;
+        this._recordingExt = picked.ext;
+        this._recordingHitCap = false;
+        recorder.addEventListener('dataavailable', (ev) => {
+          if (ev.data && ev.data.size > 0) this._recordingChunks.push(ev.data);
+        });
+        recorder.addEventListener('stop', () => this._finalizeRecording());
+        recorder.addEventListener('error', (ev) => {
+          this.showError('errRecordingFailed', (ev.error && ev.error.message) || 'unknown');
+        });
+        recorder.start();
+
+        this._recordingStartTs = Date.now();
+        this._updateRecordingTimer();
+        this._recordingTimerId = setInterval(() => this._updateRecordingTimer(), 1000);
+        this._recordingMaxId = setTimeout(() => {
+          this._recordingHitCap = true;
+          this.stopRecording();
+        }, this.RECORDING_MAX_MS);
+
+        this.recIndicator.hidden = false;
+        this._setRecordPillRecording(true);
+      },
+
+      stopRecording() {
+        if (!this._mediaRecorder || this._mediaRecorder.state !== 'recording') return;
+        try { this._mediaRecorder.stop(); }
+        catch (e) { this.showError('errRecordingFailed', e.message); }
+      },
+
+      _finalizeRecording() {
+        const chunks = this._recordingChunks;
+        const mime = this._recordingMime || (chunks[0] && chunks[0].type) || 'video/webm';
+        const ext = this._recordingExt || 'webm';
+        const hitCap = this._recordingHitCap;
+        this._recordingChunks = [];
+        this._mediaRecorder = null;
+
+        if (this._recordingTimerId) { clearInterval(this._recordingTimerId); this._recordingTimerId = null; }
+        if (this._recordingMaxId) { clearTimeout(this._recordingMaxId); this._recordingMaxId = null; }
+        this.recIndicator.hidden = true;
+        this._setRecordPillRecording(false);
+
+        if (!chunks.length) return;
+        const blob = new Blob(chunks, { type: mime });
+        const filename = 'achromat-' + this.captureTimestamp() + '.' + ext;
+        this.shareBlob(blob, filename).catch(() => this.showError('errShareFailed'));
+        if (hitCap) this.showError('recordingMaxLength');
+      },
+
+      _updateRecordingTimer() {
+        const elapsed = Math.floor((Date.now() - this._recordingStartTs) / 1000);
+        const m = Math.floor(elapsed / 60);
+        const s = elapsed % 60;
+        this.recTime.textContent = m + ':' + (s < 10 ? '0' + s : s);
+      },
+
+      _setRecordPillRecording(recording) {
+        this.setPillState(this.btnRecord, recording);
+        const t = this.strings || I18N.en;
+        this.btnRecord.textContent = recording ? t.recordStop : t.record;
+        this.btnRecord.title = recording ? t.recordStopTitle : t.recordTitle;
+      },
+
       /** Web Share with files where supported, else trigger a hidden
        *  <a download>. Treats user cancellation as success (no error). */
       async shareBlob(blob, filename) {
@@ -1236,6 +1411,8 @@ void main() {
         this.btnFreeze.title = t.freezeTitle;
         this.btnPhoto.textContent = t.photo;
         this.btnPhoto.title = t.photoTitle;
+        const recording = !!(this._mediaRecorder && this._mediaRecorder.state === 'recording');
+        this._setRecordPillRecording(recording);
         this.btnET.textContent = t.glare;
         this.btnET.title = t.glareTitle;
         this.btnFS.textContent = t.fullscreen;
@@ -1294,8 +1471,13 @@ void main() {
       },
 
       /** Stop the render loop, release the camera, and drop the wake lock.
-       *  Called when the page is hidden and on unload. Safe to call repeatedly. */
+       *  Called when the page is hidden and on unload. Safe to call repeatedly.
+       *  Auto-stops any in-progress recording first so its chunks aren't lost
+       *  to the about-to-be-stopped camera stream. */
       suspend() {
+        if (this._mediaRecorder && this._mediaRecorder.state === 'recording') {
+          this.stopRecording();
+        }
         if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = null; }
         if (this.stream) {
           this.stream.getTracks().forEach(t => t.stop());
@@ -1336,12 +1518,14 @@ void main() {
     sim.restorePrefs();
     sim.applyLocale();
     sim.initFullscreen();
+    sim.initRecording();
 
     sim.btnGray.addEventListener('click', () => sim.toggleGrayscale());
     sim.btnET.addEventListener('click', () => sim.toggleET());
     sim.btnBlur.addEventListener('click', () => sim.toggleBlur());
     sim.btnFreeze.addEventListener('click', () => sim.toggleFreeze());
     sim.btnPhoto.addEventListener('click', () => sim.savePhoto());
+    sim.btnRecord.addEventListener('click', () => sim.toggleRecording());
     sim.btnFS.addEventListener('click', () => sim.toggleFullscreen());
     sim.btnSettings.addEventListener('click', () => sim.toggleSettings());
     sim.camSelect.addEventListener('change', () => sim.onCameraSelectChange());
