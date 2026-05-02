@@ -394,6 +394,8 @@ void main() {
       _etApplyPending: false,
       _wakeLock: null,
       _resumePending: false,
+      _lastErrorKey: null,
+      _lastErrorParams: null,
 
       initGL() {
         const gl = this.canvas.getContext('webgl', { antialias: false, depth: false, stencil: false });
@@ -1077,8 +1079,8 @@ void main() {
         if (optEn)   optEn.textContent = t.langEn;
         if (optCs)   optCs.textContent = t.langCs;
         this.langSelect.value = readLocaleOverride() || 'auto';
-        if (this.errorDiv.style.display === 'block' && this._lastErrorKey) {
-          this.showError(this._lastErrorKey, ...(this._lastErrorParams || []));
+        if (this._lastErrorKey) {
+          this.showError(this._lastErrorKey, ...this._lastErrorParams);
         }
       },
 
