@@ -319,6 +319,46 @@ The HUD updates at ~1 Hz. FPS is computed from a frame counter that
 update so it costs one integer increment per rAF when the flag is off
 (measurable as zero).
 
+## Shareable URL hash
+
+Every shareable setting is mirrored into `location.hash` so the URL
+itself reproduces the current view. Send a colleague the link, they
+open it, they see exactly what you saw. The hash is rewritten on every
+change via `history.replaceState` (no history entry per pill toggle)
+and is read once on load — manual edits to the hash mid-session do
+*not* snap the UI around.
+
+Format is plain `key=value` separated by `&`, kept short:
+
+| Key | Meaning              | Values                          |
+|-----|----------------------|---------------------------------|
+| `g` | Grayscale            | `1` / `0`                       |
+| `gm`| Grayscale type       | `scotopic` / `rec601`           |
+| `b` | Blur                 | `1` / `0`                       |
+| `va`| Visual acuity        | `0.050`–`0.300`, three decimals |
+| `et`| Glare                | `1` / `0`                       |
+| `l` | Locale override      | `auto` / `en` / `cs`            |
+
+Precedence at load is **defaults → localStorage → URL** so a shared
+link wins over the recipient's saved prefs. Settings applied from the
+URL only affect the in-memory state — the localStorage prefs blob is
+not touched on load, so closing the link without further interaction
+returns the recipient to their saved view on next visit. Toggling a
+pill afterwards saves the new state as usual.
+
+The **locale** is the deliberate exception: a URL `l=cs` (or `en`,
+`auto`) is written through to `LOCALE_STORAGE_KEY` immediately so the
+language dropdown reflects the URL's choice and so subsequent visits
+remember it. Locale is the one setting where mid-session change is
+disruptive (every UI label re-renders), and a recipient who opens a
+Czech link almost certainly wants Czech going forward; if not, they
+can change it back.
+
+The camera selection is intentionally *not* in the URL: `deviceId` is
+not portable across devices, so encoding it would actively mislead
+the recipient. The freeze state is also excluded — it's transient
+session state, not a configuration anyone wants to share.
+
 ## PWA / Add to Home Screen
 
 A `manifest.json` with `"display": "fullscreen"` allows users to install

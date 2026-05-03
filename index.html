@@ -390,6 +390,18 @@ void main() {
       return wantsCs ? 'cs' : 'en';
     }
 
+    /** Decode location.hash into a flat object of string values. Empty
+     *  hash yields {}. Unknown keys are kept (caller decides what to
+     *  do with them). Only the last occurrence of a repeated key wins. */
+    function parseHashParams() {
+      const raw = (location.hash || '').replace(/^#/, '');
+      if (!raw) return {};
+      const params = new URLSearchParams(raw);
+      const out = {};
+      for (const [k, v] of params) out[k] = v;
+      return out;
+    }
+
     const sim = {
       video: document.getElementById('video'),
       canvas: document.getElementById('canvas'),
@@ -1110,6 +1122,7 @@ void main() {
         const camDevice = this.cameras[this.cameraIndex];
         if (camDevice) prefs.cameraDeviceId = camDevice.deviceId;
         savePrefs(prefs);
+        this.syncURLHash();
       },
 
       restorePrefs() {
@@ -1139,6 +1152,66 @@ void main() {
         if (typeof p.cameraDeviceId === 'string') {
           this._preferredCameraDeviceId = p.cameraDeviceId;
         }
+      },
+
+      /** Apply settings encoded in location.hash on top of whatever
+       *  restorePrefs already set. Hash wins over localStorage so a
+       *  shared link reproduces the sender's view even if the recipient
+       *  has different prefs saved. Camera deviceId is intentionally
+       *  excluded (not portable across devices); locale is honored via
+       *  the same localStorage override path the language selector uses
+       *  so subsequent sessions remember it. Each value is validated
+       *  the same way restorePrefs validates the localStorage shape. */
+      restoreFromURL() {
+        const h = parseHashParams();
+        if (h.g === '1' || h.g === '0') {
+          this.grayscaleOn = h.g === '1';
+          this.setPillState(this.btnGray, this.grayscaleOn);
+        }
+        if (h.gm === 'scotopic' || h.gm === 'rec601') {
+          this.grayMode = h.gm;
+          this.grayModeSelect.value = h.gm;
+        }
+        if (h.b === '1' || h.b === '0') {
+          this.blurOn = h.b === '1';
+          this.setPillState(this.btnBlur, this.blurOn);
+          this.blurRow.style.display = this.blurOn ? 'flex' : 'none';
+        }
+        if (h.va) {
+          const va = parseFloat(h.va);
+          if (Number.isFinite(va) && va >= 0.05 && va <= 0.3) {
+            this.blurVA = va;
+            this.blurSlider.value = Math.round(va * 1000);
+            this.blurVal.textContent = va.toFixed(3);
+          }
+        }
+        if (h.et === '1' || h.et === '0') {
+          this.etOn = h.et === '1';
+        }
+        if (h.l === 'auto' || h.l === 'en' || h.l === 'cs') {
+          try {
+            if (h.l === 'auto') localStorage.removeItem(LOCALE_STORAGE_KEY);
+            else localStorage.setItem(LOCALE_STORAGE_KEY, h.l);
+          } catch (e) { /* private mode */ }
+        }
+      },
+
+      /** Encode the current shareable state into location.hash via
+       *  history.replaceState (so it doesn't pile up history entries
+       *  when the user toggles a pill). Camera selection is excluded
+       *  -- deviceIds aren't portable across devices, so encoding one
+       *  in a URL would actively mislead the recipient. */
+      syncURLHash() {
+        const params = new URLSearchParams();
+        params.set('g', this.grayscaleOn ? '1' : '0');
+        params.set('gm', this.grayMode);
+        params.set('b', this.blurOn ? '1' : '0');
+        params.set('va', this.blurVA.toFixed(3));
+        params.set('et', this.etOn ? '1' : '0');
+        params.set('l', readLocaleOverride() || 'auto');
+        const hash = '#' + params.toString();
+        if (location.hash === hash) return;
+        history.replaceState(null, '', location.pathname + location.search + hash);
       },
 
       toggleGrayscale() {
@@ -1369,6 +1442,7 @@ void main() {
           }
         } catch (e) { /* private mode */ }
         this.applyLocale();
+        this.syncURLHash();
       },
 
       applyLocale() {
@@ -1480,7 +1554,9 @@ void main() {
     };
 
     sim.restorePrefs();
+    sim.restoreFromURL();
     sim.applyLocale();
+    sim.syncURLHash();
     sim.initFullscreen();
     sim.initDebug();
 

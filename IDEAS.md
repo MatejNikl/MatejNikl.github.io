@@ -193,14 +193,6 @@ without having to walk outside. Capability-detect with
 `getCapabilities().torch` and reuse the same hidden-pill pattern as
 Glare.
 
-### Reproducibility URL — impact ★ · effort ★
-
-Encode the current settings in `location.hash`
-(e.g. `#gray=on&blur=0.10&et=auto&grayMode=scotopic`) so a colleague
-can be sent a link that opens in exactly the same configuration.
-Already trivial given the existing `persistPrefs()` shape — read on
-load, write on change.
-
 ### Landscape orientation hint — impact ★ · effort ★
 
 The 16:9 stream gets cropped top/bottom by `object-fit: cover` in
@@ -276,3 +268,7 @@ For the historical record, these earlier ideas have shipped:
   canvas vs viewport sizes (with DPR), blur sigma / downsample level /
   per-level sigma, FPS, current ET / ISO, last-measured luminance, and
   active camera. Read once at boot, updates at 1 Hz, English-only.
+- **Reproducibility URL** — current settings (grayscale + mode, blur +
+  VA, glare, locale) are encoded in `location.hash` and rewritten via
+  `history.replaceState` on every change. URL wins over saved prefs at
+  load. Camera selection deliberately excluded (deviceId not portable).
