@@ -201,28 +201,33 @@ half-size FBO; with `MIN_FILTER = LINEAR`, sampling at the centre of every
 want to suppress aliasing of any high-frequency detail beyond the per-level
 Nyquist limit.
 
-The blur shader (`BLUR_FRAG_SRC`) does a separable, unit-spaced 13-tap
-Gaussian — center weight plus six off-center pairs. The host JS picks a
-**downsample level** so the per-level `σ_kernel = σ / 2^L` stays under
-`~1.5 px`, which keeps the kernel half-width within the shader's hard
-`MAX_BLUR_TAPS_HALF = 6` limit (covering `±4σ`, > 99.99 % of the kernel
-mass). Weights are baked in JS each frame from `σ_kernel` and uploaded as
-a `uniform float[7]`; entries whose unit-Gaussian PDF falls below a 1e-3
-cutoff are zeroed in JS, so the shader can always run the full unrolled
-loop and the corresponding tap pairs just multiply-and-add zero. The
-wasted work for those zero weights is well below the noise floor at
-this kernel size, and avoiding a dynamic loop bound keeps both the
-shader source and the host call site simpler. For our slider range:
+The blur shader (`BLUR_FRAG_SRC`) does a separable Gaussian using
+**bilinear-tap sampling**: each off-center fetch is a bilinear sample
+positioned between two adjacent unit-pixel offsets, weighted by the
+sum of the two underlying Gaussian weights. The GPU's hardware
+bilinear filter blends the two adjacent texels in exactly the
+proportion the unit-spaced Gaussian would have summed them at, for
+the cost of *one* fetch. So `MAX_BLUR_TAPS_HALF = 6` paired off-center
+taps reach **12 unit pixels** out from the centre (each side) while
+costing only 13 texture fetches per pixel per pass (1 centre + 12
+off-centre). That doubles the kernel's reach vs naive unit-spaced
+sampling at the same shader cost.
 
-| VA   | σ (full px) | level | σ at level | non-zero taps |
-|------|-------------|-------|------------|---------------|
-| 0.30 | 0.7         | 0     | 0.7        | 2             |
-| 0.10 | 2.7         | 1     | 1.35       | 5             |
-| 0.05 | 5.7         | 2     | 1.425      | 5             |
+Weights and offsets are baked in JS each frame from the per-level
+`σ_kernel = σ / 2^L`, where the host picks a **downsample level** so
+that `σ_kernel` stays small enough for the 12-pixel-reach kernel to
+still cover several sigmas. Underlying Gaussian weights below a 1e-3
+cutoff are zeroed before pairing; if both members of a pair end up at
+zero the paired weight is zero too (the fetch multiplies by zero) and
+the offset is set to the pair's nominal centre to keep the value
+finite. The shader always runs the full unrolled 6-iteration loop —
+the wasted work for zero-weight pairs is well below the noise floor
+and avoiding a dynamic loop bound keeps both the shader source and
+the host call site simpler.
 
-When **Blur is off** the entire FBO chain is skipped and the prep shader
-draws straight to the default framebuffer. That keeps the blur-off cost
-identical to the non-blur path.
+When **Blur is off** the entire FBO chain is skipped and the prep
+shader draws straight to the default framebuffer. That keeps the
+blur-off cost identical to the non-blur path.
 
 > **Earlier attempt that didn't work.** Before the downsample chain, the
 > blur shader scaled tap *spacing* by σ at full resolution (a 9-tap kernel

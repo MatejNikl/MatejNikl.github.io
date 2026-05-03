@@ -245,31 +245,36 @@ void main() {
     gl_FragColor = c;
 }`;
 
-    // Separable Gaussian blur at unit pixel spacing on the bound source
-    // texture. The host JS picks a downsample level so that the effective
-    // sigma at the level's resolution stays <= ~1.5 px, which keeps the
-    // kernel half-width within MAX_BLUR_TAPS_HALF (6 -> 13 total taps
-    // covering ~+/-4 sigma). Weights are baked in JS each time sigma
-    // changes and uploaded as a uniform array; entries past the per-
-    // sigma cutoff are zeroed so the corresponding tap pair contributes
-    // nothing. We always run the full unrolled loop -- the wasted work
-    // for zero weights is well below the noise floor at this kernel
-    // size, and avoiding a dynamic loop bound keeps the shader source
-    // and the host call site simpler.
+    // Separable Gaussian blur. Each off-center "tap" in this shader is a
+    // *bilinear* sample positioned between two adjacent unit-pixel
+    // offsets, weighted by the sum of the two underlying Gaussian
+    // weights. The GPU's hardware bilinear filter computes the same
+    // weighted blend a pair of point samples would, for the cost of one
+    // fetch -- so MAX_BLUR_TAPS_HALF=6 paired taps reach 12 unit pixels
+    // out from the center while costing only 13 texture fetches per
+    // pixel per pass (1 center + 6*2 off-center). That doubles the
+    // kernel's reach vs naive unit-spaced sampling at the same shader
+    // cost. Weights and offsets are baked per-frame in JS from the
+    // current sigma; pairs whose underlying Gaussian weights both fall
+    // below the cutoff get a zero weight, so the corresponding fetch
+    // multiplies by zero (we still run the full unrolled loop because
+    // a static loop bound is simpler than a dynamic one and the
+    // wasted work is well below the noise floor at this kernel size).
     const MAX_BLUR_TAPS_HALF = 6;
     const BLUR_FRAG_SRC = `
 precision mediump float;
 uniform sampler2D uSrc;
 uniform vec2 uTexelStep;
 uniform float uWeights[${MAX_BLUR_TAPS_HALF + 1}];
+uniform float uOffsets[${MAX_BLUR_TAPS_HALF}];
 varying vec2 vTexCoord;
 
 void main() {
     vec4 sum = texture2D(uSrc, vTexCoord) * uWeights[0];
     for (int i = 1; i <= ${MAX_BLUR_TAPS_HALF}; i++) {
-        float fi = float(i);
-        sum += texture2D(uSrc, vTexCoord + uTexelStep * fi) * uWeights[i];
-        sum += texture2D(uSrc, vTexCoord - uTexelStep * fi) * uWeights[i];
+        float off = uOffsets[i - 1];
+        sum += texture2D(uSrc, vTexCoord + uTexelStep * off) * uWeights[i];
+        sum += texture2D(uSrc, vTexCoord - uTexelStep * off) * uWeights[i];
     }
     gl_FragColor = sum;
 }`;
@@ -493,7 +498,7 @@ void main() {
           ['uSrc', 'uGrayscale', 'uGrayMode', 'uFlipY']);
         if (!prep) return false;
         const blur = this._buildProgram(vs, BLUR_FRAG_SRC, 'Blur',
-          ['uSrc', 'uTexelStep', 'uWeights']);
+          ['uSrc', 'uTexelStep', 'uWeights', 'uOffsets']);
         if (!blur) return false;
         const ds = this._buildProgram(vs, DS_FRAG_SRC, 'Downsample',
           ['uSrc', 'uSrcSize']);
@@ -834,34 +839,65 @@ void main() {
 
       _runBlur(srcTex, dstFbo, dstW, dstH, sigma, horizontal) {
         const gl = this.gl, u = this.blurUniforms;
-        const weights = this._gaussianWeights(sigma);
+        const { weights, offsets } = this._gaussianWeights(sigma);
         this._drawQuad(this.blurProgram, srcTex, dstFbo, dstW, dstH, () => {
           gl.uniform1fv(u.uWeights, weights);
+          gl.uniform1fv(u.uOffsets, offsets);
           if (horizontal) gl.uniform2f(u.uTexelStep, 1 / dstW, 0);
           else            gl.uniform2f(u.uTexelStep, 0, 1 / dstH);
         });
       },
 
-      /** Build one half of a normalised Gaussian kernel at unit pixel
-       *  spacing. w[0] is the center weight, w[1..MAX_BLUR_TAPS_HALF]
-       *  are the off-center weights (the shader applies each to both
-       *  the +i and -i sample). Entries whose unit-Gaussian PDF falls
-       *  below a 1e-3 cutoff are zeroed so they contribute nothing
-       *  when the shader unrolls the full loop. */
+      /** Build a normalised Gaussian kernel collapsed onto bilinear taps.
+       *  Returns { weights, offsets } where:
+       *    weights[0]      = center weight
+       *    weights[1..N]   = paired weight for the k-th bilinear tap
+       *                      (applied to both the + and - direction)
+       *    offsets[0..N-1] = sub-pixel offset of the k-th paired tap
+       *  with N = MAX_BLUR_TAPS_HALF.
+       *
+       *  Pair k (1-indexed) covers the underlying unit-pixel offsets
+       *  (2k-1, 2k); the bilinear sample's offset is the centre of mass
+       *  of the two underlying Gaussian weights, and its weight is
+       *  their sum. The GPU's hardware bilinear filter then blends the
+       *  two adjacent texels in exactly the proportion the unit-spaced
+       *  Gaussian would have summed them at -- one fetch, two taps'
+       *  worth of mass.
+       *
+       *  Underlying weights below a 1e-3 cutoff are zeroed before
+       *  pairing so faraway taps contribute nothing. If both members of
+       *  a pair are zeroed the paired weight is zero too; the offset
+       *  then doesn't matter (the fetch is multiplied by zero) so we
+       *  pick the pair's nominal centre to keep the value finite. */
       _gaussianWeights(sigma) {
-        const max = MAX_BLUR_TAPS_HALF;
-        const w = new Float32Array(max + 1);
+        const halfPairs = MAX_BLUR_TAPS_HALF;
+        const halfTaps = halfPairs * 2;
         const cutoff = 1e-3;
         const inv2s2 = 1 / (2 * sigma * sigma);
-        for (let i = 0; i <= max; i++) {
+
+        const g = new Float32Array(halfTaps + 1);
+        for (let i = 0; i <= halfTaps; i++) {
           const v = Math.exp(-(i * i) * inv2s2);
-          w[i] = (i === 0 || v >= cutoff) ? v : 0;
+          g[i] = (i === 0 || v >= cutoff) ? v : 0;
         }
-        let sum = w[0];
-        for (let i = 1; i <= max; i++) sum += 2 * w[i];
+
+        const weights = new Float32Array(halfPairs + 1);
+        const offsets = new Float32Array(halfPairs);
+        weights[0] = g[0];
+        for (let k = 1; k <= halfPairs; k++) {
+          const a = g[2 * k - 1];
+          const b = g[2 * k];
+          const wp = a + b;
+          weights[k] = wp;
+          offsets[k - 1] = wp > 0 ? (a * (2 * k - 1) + b * (2 * k)) / wp : (2 * k - 0.5);
+        }
+
+        let sum = weights[0];
+        for (let k = 1; k <= halfPairs; k++) sum += 2 * weights[k];
         const inv = 1 / sum;
-        for (let i = 0; i <= max; i++) w[i] *= inv;
-        return w;
+        for (let k = 0; k <= halfPairs; k++) weights[k] *= inv;
+
+        return { weights, offsets };
       },
 
       async start() {
