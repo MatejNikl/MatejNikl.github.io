@@ -46,6 +46,21 @@ Controls are anchored top-right unless noted.
   fullscreen on the `<html>` element (it only supports fullscreen on
   `<video>` elements), so the capability check returns false there and the
   pill stays hidden — no explicit iOS UA sniff needed.
+- **About** (ⓘ): Opens a modal overlay with a plain-language explanation
+  of achromatopsia, what each control simulates, the original motivation,
+  and links to authoritative external sources (NIH GARD, Achromatopsia
+  Network). Aimed at the people the simulator is *for* — teachers,
+  therapists, family — rather than the parent who already knows the
+  story; the prose is deliberately short and skips clinical terminology.
+  Dismissable three ways: the close (×) button, a tap on the dim
+  backdrop, or the Escape key. Focus management restores focus to the
+  pill on close so keyboard / screen-reader users don't lose their
+  place. The overlay also hosts a **Share this view** button that
+  prefers `navigator.share` (so mobile users get the native share
+  sheet) and falls back to `navigator.clipboard.writeText` (with the
+  button label flipping to "Link copied" for ~1.5 s as inline
+  confirmation) — both leverage the reproducibility URL hash that
+  `syncURLHash` already keeps current.
 - **Settings** (gear): Opens a panel below the gear with:
   - **Grayscale type**: Dropdown — **Science-based** (scotopic / rod-weighted
     luminance in the shader) vs **Plain B&W** (Rec. 601) when grayscale is on.

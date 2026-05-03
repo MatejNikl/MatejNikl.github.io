@@ -149,6 +149,99 @@
       flex: 1;
       accent-color: #aaa;
     }
+    #info-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      z-index: 40;
+    }
+    #info-overlay[hidden] { display: none; }
+    .info-card {
+      position: relative;
+      max-width: 520px;
+      width: 100%;
+      max-height: 85vh;
+      overflow: auto;
+      background: rgba(20,20,20,0.97);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 12px;
+      padding: 22px 22px 18px 22px;
+      color: #ddd;
+      font: 14px/1.5 system-ui, sans-serif;
+    }
+    .info-card h2 {
+      margin: 0 0 12px 0;
+      padding-right: 32px;
+      font-size: 18px;
+      font-weight: 600;
+      color: #fff;
+    }
+    .info-card h3 {
+      margin: 18px 0 6px 0;
+      font-size: 13px;
+      font-weight: 600;
+      color: #aaa;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .info-card p { margin: 0 0 10px 0; }
+    .info-card ul {
+      margin: 0 0 10px 0;
+      padding-left: 18px;
+    }
+    .info-card a {
+      color: #6db8ff;
+      text-decoration: underline;
+    }
+    .info-card a:focus-visible {
+      outline: 2px solid #fff;
+      outline-offset: 2px;
+      border-radius: 2px;
+    }
+    .info-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 14px;
+    }
+    .info-actions button {
+      flex: 1;
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.25);
+      background: rgba(255,255,255,0.08);
+      color: #fff;
+      font: 600 13px/1.2 system-ui, sans-serif;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .info-actions button:focus-visible {
+      outline: 2px solid #fff;
+      outline-offset: 2px;
+    }
+    .info-actions button:active { background: rgba(255,255,255,0.18); }
+    .info-close {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: none;
+      background: rgba(255,255,255,0.08);
+      color: #fff;
+      font: 600 18px/1 system-ui, sans-serif;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .info-close:focus-visible {
+      outline: 2px solid #fff;
+      outline-offset: 2px;
+    }
+    .info-close:active { background: rgba(255,255,255,0.18); }
   </style>
 </head>
 <body>
@@ -163,6 +256,7 @@
     <button type="button" id="btn-photo" class="pill hidden" title="Save the current frame as a photo">Photo</button>
     <button type="button" id="btn-et" class="pill on hidden" aria-pressed="true" title="Simulates glare / photophobia in bright conditions">Glare</button>
     <button type="button" id="btn-fs" class="pill hidden" aria-pressed="false" title="Toggle fullscreen mode">Fullscreen</button>
+    <button type="button" id="btn-info" class="pill pill-gear" aria-haspopup="dialog" aria-expanded="false" title="About">&#x2139;&#xFE0E;</button>
     <button type="button" id="btn-settings" class="pill pill-gear" aria-pressed="false" aria-haspopup="true" aria-expanded="false" title="Settings">&#x2699;</button>
   </div>
   <div id="settings-panel">
@@ -185,6 +279,23 @@
       <label id="label-camera">Camera</label>
       <select id="cam-select"></select>
     </div>
+  </div>
+  <div id="info-overlay" role="dialog" aria-modal="true" aria-labelledby="info-title" hidden>
+    <article class="info-card">
+      <button type="button" id="info-close" class="info-close" aria-label="Close">&times;</button>
+      <h2 id="info-title">About</h2>
+      <p id="info-p1"></p>
+      <p id="info-p2"></p>
+      <p id="info-p3"></p>
+      <h3 id="info-learn-more"></h3>
+      <ul>
+        <li><a id="info-link-gard" href="https://rarediseases.info.nih.gov/diseases/5878/achromatopsia" target="_blank" rel="noopener noreferrer"></a></li>
+        <li><a id="info-link-network" href="https://www.achromatopsia.info/" target="_blank" rel="noopener noreferrer"></a></li>
+      </ul>
+      <div class="info-actions">
+        <button type="button" id="info-share"></button>
+      </div>
+    </article>
   </div>
   <div id="sliders">
     <div id="blur-row" class="slider-row" style="display:flex">
@@ -395,6 +506,19 @@ void main() {
         langCs: 'Czech',
         fullscreen: 'Fullscreen',
         fullscreenTitle: 'Toggle fullscreen mode',
+        aboutTitle: 'About',
+        aboutPill: 'About',
+        aboutPillTitle: 'About this simulator',
+        aboutClose: 'Close',
+        aboutP1: 'Achromatopsia (rod monochromacy) is a rare inherited eye condition affecting roughly 1 in 30,000 people. Affected eyes have no functioning cones \u2014 the retinal cells responsible for color vision and sharp daylight sight \u2014 and rely entirely on rods. The result is total color blindness, reduced visual acuity (typically around 20/200), and strong sensitivity to bright light.',
+        aboutP2: 'This camera-based simulator approximates that experience for sighted viewers. Grayscale removes color the way a rod-only retina would. Blur simulates the reduced acuity \u2014 the Sharpness slider lets you tune how blurry. Glare locks the camera\u2019s exposure high so bright scenes wash out, mimicking how the lack of cone-driven adaptation makes daylight overwhelming.',
+        aboutP3: 'Built by a parent of a young achromat who is too young to describe how he sees the world. The goal is to give family, teachers, and therapists a usable approximation. The simulation is intentionally simple \u2014 it does not yet model contrast loss or nystagmus \u2014 and is best treated as a starting point for conversation, not a clinical tool.',
+        aboutLearnMore: 'Learn more',
+        aboutLinkGard: 'NIH GARD: Achromatopsia',
+        aboutLinkNetwork: 'Achromatopsia Network',
+        aboutShare: 'Share this view',
+        aboutShareCopied: 'Link copied',
+        aboutShareFailed: 'Could not share link',
       },
       cs: {
         title: 'Simulátor achromatopsie',
@@ -424,6 +548,19 @@ void main() {
         langCs: 'Čeština',
         fullscreen: 'Celá obrazovka',
         fullscreenTitle: 'Přepnout režim celé obrazovky',
+        aboutTitle: 'O aplikaci',
+        aboutPill: 'O aplikaci',
+        aboutPillTitle: 'O tomto simulátoru',
+        aboutClose: 'Zavřít',
+        aboutP1: 'Achromatopsie (úplná tyčinková monochromacie) je vzácné dědičné onemocnění oka, které se vyskytuje přibližně u 1 z 30 000 lidí. Postižené oči nemají funkční čípky \u2014 buňky sítnice odpovědné za barevné vidění a ostrý zrak za denního světla \u2014 a spoléhají výhradně na tyčinky. Důsledkem je úplná barvoslepost, snížená zraková ostrost (typicky kolem 20/200) a silná citlivost na jasné světlo.',
+        aboutP2: 'Tento simulátor využívá kameru telefonu a přibližuje tuto zkušenost vidoucím. Stupně šedi odstraňují barvu, podobně jako sítnice spoléhající jen na tyčinky. Rozmazání simuluje sníženou ostrost \u2014 posuvník Ostrost umožňuje ji doladit. Oslnění uzamkne expozici kamery na vysokých hodnotách, takže jasné scény vyběleně přesvítí, podobně jako u achromata, kterému chybí adaptace přes čípky.',
+        aboutP3: 'Aplikaci vytvořil rodič malého achromata, který je ještě příliš malý na to, aby popsal, jak svět vidí. Cílem je nabídnout rodině, učitelům a terapeutům použitelné přiblížení. Simulace je záměrně jednoduchá \u2014 zatím nemodeluje například ztrátu kontrastu nebo nystagmus \u2014 a je vhodná spíše jako východisko k rozhovoru, ne jako klinický nástroj.',
+        aboutLearnMore: 'Více informací',
+        aboutLinkGard: 'NIH GARD: Achromatopsie (anglicky)',
+        aboutLinkNetwork: 'Achromatopsia Network (anglicky)',
+        aboutShare: 'Sdílet tento pohled',
+        aboutShareCopied: 'Odkaz zkopírován',
+        aboutShareFailed: 'Sdílení odkazu se nezdařilo',
       },
     };
 
@@ -479,8 +616,12 @@ void main() {
       btnGray: document.getElementById('btn-gray'),
       btnET: document.getElementById('btn-et'),
       btnFS: document.getElementById('btn-fs'),
+      btnInfo: document.getElementById('btn-info'),
       btnSettings: document.getElementById('btn-settings'),
       settingsPanel: document.getElementById('settings-panel'),
+      infoOverlay: document.getElementById('info-overlay'),
+      infoCloseBtn: document.getElementById('info-close'),
+      infoShareBtn: document.getElementById('info-share'),
       grayModeSelect: document.getElementById('gray-mode'),
       btnBlur: document.getElementById('btn-blur'),
       btnFreeze: document.getElementById('btn-freeze'),
@@ -519,6 +660,9 @@ void main() {
       blurVA: 0.10,
       frozen: false,
       settingsOpen: false,
+      infoOpen: false,
+      _infoReturnFocus: null,
+      _infoShareResetTimer: null,
       cameras: [],
       cameraIndex: -1,
       _preferredCameraDeviceId: null,
@@ -1621,6 +1765,71 @@ void main() {
       toggleSettings() { this.setSettingsOpen(!this.settingsOpen); },
       closeSettings()  { if (this.settingsOpen) this.setSettingsOpen(false); },
 
+      /** Open or close the about/info modal. On open we remember which
+       *  element launched it so we can return focus there on close
+       *  (matters for keyboard / screen-reader users), and move focus
+       *  into the dialog. On close we cancel any pending share-button
+       *  label revert -- the button's transient "Link copied" label is
+       *  no longer visible so resetting its text immediately is fine. */
+      setInfoOpen(open) {
+        this.infoOpen = open;
+        this.infoOverlay.hidden = !open;
+        this.btnInfo.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open) {
+          this._infoReturnFocus = document.activeElement;
+          this.infoCloseBtn.focus();
+        } else {
+          if (this._infoShareResetTimer) {
+            clearTimeout(this._infoShareResetTimer);
+            this._infoShareResetTimer = null;
+            this.infoShareBtn.textContent = this.strings.aboutShare;
+          }
+          const target = this._infoReturnFocus;
+          this._infoReturnFocus = null;
+          if (target && typeof target.focus === 'function') target.focus();
+        }
+      },
+
+      toggleInfo() { this.setInfoOpen(!this.infoOpen); },
+      closeInfo()  { if (this.infoOpen) this.setInfoOpen(false); },
+
+      /** Share the current canonical URL (which already encodes the full
+       *  view via the reproducibility hash). Prefer the Web Share API on
+       *  mobile so the user gets the native share sheet; on desktop fall
+       *  back to clipboard. AbortError from the share sheet is the user
+       *  cancelling and is intentionally swallowed. The button label
+       *  flips to a confirmation for ~1.5 s and then reverts -- a small
+       *  inline affordance instead of a global toast. */
+      async shareCurrentView() {
+        const t = this.strings;
+        const url = location.href;
+        const shareData = { url, title: t.title, text: t.aboutP1 };
+        try {
+          if (navigator.share && (!navigator.canShare || navigator.canShare(shareData))) {
+            await navigator.share(shareData);
+            return;
+          }
+          if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(url);
+            this._flashShareLabel(t.aboutShareCopied);
+            return;
+          }
+          this._flashShareLabel(t.aboutShareFailed);
+        } catch (err) {
+          if (err && err.name === 'AbortError') return;
+          this._flashShareLabel(t.aboutShareFailed);
+        }
+      },
+
+      _flashShareLabel(msg) {
+        if (this._infoShareResetTimer) clearTimeout(this._infoShareResetTimer);
+        this.infoShareBtn.textContent = msg;
+        this._infoShareResetTimer = setTimeout(() => {
+          this.infoShareBtn.textContent = this.strings.aboutShare;
+          this._infoShareResetTimer = null;
+        }, 1500);
+      },
+
       onLanguageChange() {
         const v = this.langSelect.value;
         try {
@@ -1653,6 +1862,17 @@ void main() {
         this.btnFS.title = t.fullscreenTitle;
         this.btnSettings.title = t.settingsTitle;
         this.btnSettings.setAttribute('aria-label', t.settingsTitle);
+        this.btnInfo.title = t.aboutPillTitle;
+        this.btnInfo.setAttribute('aria-label', t.aboutPill);
+        this.infoCloseBtn.setAttribute('aria-label', t.aboutClose);
+        document.getElementById('info-title').textContent = t.aboutTitle;
+        document.getElementById('info-p1').textContent = t.aboutP1;
+        document.getElementById('info-p2').textContent = t.aboutP2;
+        document.getElementById('info-p3').textContent = t.aboutP3;
+        document.getElementById('info-learn-more').textContent = t.aboutLearnMore;
+        document.getElementById('info-link-gard').textContent = t.aboutLinkGard;
+        document.getElementById('info-link-network').textContent = t.aboutLinkNetwork;
+        if (!this._infoShareResetTimer) this.infoShareBtn.textContent = t.aboutShare;
         document.getElementById('label-gray-type').textContent = t.grayType;
         document.getElementById('label-language').textContent = t.langLabel;
         document.getElementById('label-camera').textContent = t.camera;
@@ -1755,7 +1975,16 @@ void main() {
     sim.btnFreeze.addEventListener('click', () => sim.toggleFreeze());
     sim.btnPhoto.addEventListener('click', () => sim.savePhoto());
     sim.btnFS.addEventListener('click', () => sim.toggleFullscreen());
+    sim.btnInfo.addEventListener('click', () => sim.toggleInfo());
     sim.btnSettings.addEventListener('click', () => sim.toggleSettings());
+    sim.infoCloseBtn.addEventListener('click', () => sim.closeInfo());
+    sim.infoShareBtn.addEventListener('click', () => sim.shareCurrentView());
+    // Backdrop click closes the dialog; clicks on the card itself
+    // bubble up with the card as e.target's ancestor, so check that
+    // the click landed on the overlay element directly.
+    sim.infoOverlay.addEventListener('click', (e) => {
+      if (e.target === sim.infoOverlay) sim.closeInfo();
+    });
     sim.camSelect.addEventListener('change', () => sim.onCameraSelectChange());
     sim.blurSlider.addEventListener('input', () => sim.onBlurChange());
     sim.grayModeSelect.addEventListener('change', () => sim.onGrayModeChange());
@@ -1764,6 +1993,12 @@ void main() {
       if (!sim.settingsOpen) return;
       if (sim.settingsPanel.contains(e.target) || sim.btnSettings.contains(e.target)) return;
       sim.closeSettings();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && sim.infoOpen) {
+        e.preventDefault();
+        sim.closeInfo();
+      }
     });
 
     let resizeTimeout;

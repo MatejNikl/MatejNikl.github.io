@@ -25,23 +25,6 @@ Ratings are a rough hint, not gospel:
 These have the best impact-to-effort ratio and are concrete enough to
 pick up immediately.
 
-### Info / about overlay — impact ★★★ · effort ★★
-
-*Up next.* A small `(i)` pill (or a tap on the title) that opens a
-dismissible overlay explaining, in plain language, what
-achromatopsia is and what the app does — including what each toggle
-simulates and the (deliberate) limits of the simulation (no
-contrast-sensitivity loss yet, no nystagmus, etc.). Localised to
-EN/CS like the rest of the UI. Target audience (teachers,
-therapists, extended family) often does not know the terminology —
-this is the difference between "the screen looks weird" and "ah,
-*that's* what he sees", which is the whole point of the app. Worth
-re-rating from ★★ to ★★★ impact precisely because it's the bridge
-between the technical simulator and the people the simulator is
-*for*. Pair with the reproducibility URL: the overlay is the natural
-place to surface a Share button so a teacher can send the current
-view back to a parent.
-
 ### Hide controls on inactivity — impact ★★ · effort ★
 
 Auto-fade the pill row and slider after ~3 s of no interaction,
@@ -63,15 +46,6 @@ a full reload. Make the toast itself tappable to re-run `start()`,
 and (when relevant) show a localized "Tap to retry" suffix. Cheap
 polish that prevents a dead-end on transient camera-busy errors,
 which are common on Android when another app held the camera.
-
-### Share-current-view button — impact ★★ · effort ★
-
-The reproducibility URL is already kept in `location.hash` on every
-change, but nothing surfaces it to the user — they have to know to
-copy from the address bar. A small share button (using `navigator.share`
-where available, falling back to `navigator.clipboard.writeText`)
-turns the existing infrastructure into a feature. Natural home is
-the Info / about overlay or next to the gear.
 
 ### VA preset chips — impact ★ · effort ★
 
@@ -272,3 +246,12 @@ For the historical record, these earlier ideas have shipped:
   VA, glare, locale) are encoded in `location.hash` and rewritten via
   `history.replaceState` on every change. URL wins over saved prefs at
   load. Camera selection deliberately excluded (deviceId not portable).
+- **Info / about overlay** — ⓘ pill in the top-right column opens a
+  modal with plain-language explanation of achromatopsia, what each
+  control simulates, the original motivation, and external links.
+  Localised EN/CS, dismissable three ways (close button, backdrop tap,
+  Escape), with focus management. Documented in CONTEXT.md.
+- **Share-current-view button** — lives inside the Info overlay; uses
+  `navigator.share` where available with a `navigator.clipboard.writeText`
+  fallback that flips the button label to "Link copied" for ~1.5 s as
+  inline confirmation. Builds on the reproducibility URL.
