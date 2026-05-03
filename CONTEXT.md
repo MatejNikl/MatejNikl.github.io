@@ -26,11 +26,6 @@ Controls are anchored top-right unless noted.
 - **Photo**: Captures the current canvas (live or frozen) to a PNG and offers it
   via the Web Share API where available, falling back to a hidden `<a download>`
   click. Filename is `achromat-YYYY-MM-DD_HH-MM-SS.png`.
-- **Record**: Toggles a `MediaRecorder` on `canvas.captureStream(30)`. While
-  recording, a small red-dot + `mm:ss` indicator appears top-left and the pill
-  changes to **Stop**. Stopping triggers the same share-or-download path used
-  for photos. Hidden when `MediaRecorder` or `HTMLCanvasElement.captureStream`
-  is unavailable.
 - **Glare**: Shown only when `getCapabilities()` reports `exposureMode`
   including `manual` and an `exposureTime` range. **On by default** with
   **software auto-exposure** enabled — the app measures average frame brightness
@@ -246,9 +241,9 @@ implemented. Apple keeps it behind a feature flag. Since all iOS browsers use
 WebKit, `ctx.filter` is silently ignored on every iOS browser, ruling it out as
 a portable alternative regardless of the capture concern above.
 
-## Saving photos and recording video
+## Saving photos
 
-The **Photo** and **Record** pills both produce a `Blob` and hand it to a single
+The **Photo** pill produces a `Blob` and hands it to a single
 `shareBlob(blob, filename)` helper that:
 
 1. Tries `navigator.canShare({ files: [...] })` and, if true, calls
@@ -273,29 +268,10 @@ without paying the per-frame copy cost of `preserveDrawingBuffer` for the
 the grayscale + blur combination is dominated by smooth gradients that JPEG
 would mangle.
 
-### Video: MediaRecorder on canvas.captureStream
-
-`canvas.captureStream(30)` provides the video track; recording is
-**video-only** for v1 since `getUserMedia` was opened with `video:` only.
-`pickRecordingMime()` probes `MediaRecorder.isTypeSupported` in priority
-order — `video/mp4;codecs=h264` (required on iOS Safari 15+),
-`video/webm;codecs=vp9`, `video/webm;codecs=vp8`, then plain `video/webm` as
-a last resort — and the file extension follows. The pill is hidden up front
-when either `MediaRecorder` or `HTMLCanvasElement.prototype.captureStream` is
-unavailable.
-
-A small `setInterval` updates the `mm:ss` indicator once per second; the
-indicator dot blinks via CSS animation. A 5-minute soft cap on
-`setTimeout` prevents the in-memory chunk array from ballooning during
-unattended recordings; hitting the cap shows a localised toast and
-finalises the video the same way a manual stop would.
-
 ### Visibility-hidden interaction
 
-`suspend()` (called on `visibilitychange` when the page is hidden) auto-stops
-any in-progress recording **before** it tears the camera stream down,
-otherwise the chunks captured between the last `dataavailable` and the
-camera shutdown would be lost. The freeze state, by contrast, is left as the
+`suspend()` (called on `visibilitychange` when the page is hidden) cancels the
+render loop and tears the camera stream down. The freeze state is left as the
 user set it; on `resume()` the next `processFrame()` draws a fresh frame and
 the user can re-freeze if they want.
 

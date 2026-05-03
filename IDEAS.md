@@ -238,10 +238,6 @@ For the historical record, these earlier ideas have shipped:
 - **Save photo** — Photo pill uses `canvas.toBlob` and the Web Share
   API (with `<a download>` fallback). The blur is rendered into the
   WebGL drawing buffer so it shows up in the saved PNG.
-- **Video recording / export** — Record pill uses `MediaRecorder` on
-  `canvas.captureStream(30)`, with a mime probe (mp4/h264 → vp9/webm
-  → vp8/webm), a 5-minute soft cap, and the same share-or-download
-  finishing path as photos. Auto-stops on visibility-hidden.
 - **Move blur to a shader pass** — replaced the CSS `filter: blur()`
   with a two-pass separable Gaussian shader. Required prerequisite
   for the photo / video items above.
