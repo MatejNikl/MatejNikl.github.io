@@ -190,10 +190,23 @@ radius — at half resolution one full-res sigma costs half a kernel pixel.
 videoTex --(prep: grayscale + flipY)----------> srcFbo[0]    full res
 srcFbo[0] --(passthrough, LINEAR filter)------> srcFbo[1]    half res
 srcFbo[1] --(passthrough, LINEAR filter)------> srcFbo[2]    quarter res
-srcFbo[L] --(blur H, σ_at_level)--------------> pingFbo[L]
-pingFbo[L] --(blur V, σ_at_level)-------------> srcFbo[L]    overwrites src
-srcFbo[L] --(passthrough, MAG_FILTER bilinear)> default framebuffer (screen)
+srcFbo[L] --(blur H, σ_at_level)--------------> pingFbo[L]   L-level res
+pingFbo[L] --(blur V, σ_at_level, full-res)---> default framebuffer (screen)
 ```
+
+The final V pass is rendered at full canvas resolution while still
+sampling from `pingFbo[L]` at L-level resolution. Each output pixel is
+the result of 13 hardware-bilinear-filtered fetches into the L-level
+H-blurred buffer, with sub-pixel offsets chosen so the kernel
+reconstructs the continuous-space Gaussian — that's much higher
+quality than running V at L-level and then doing a separate naive
+bilinear MAG_FILTER upsample to the screen, which is what an earlier
+revision did. The trade-off is GPU cost: the V pass now shades all
+`w*h` full-resolution pixels instead of `lw*lh` L-level ones, so
+total fragment work for the final pass goes up by a factor of `4^L`.
+At default settings (L = 1 or 2) this is well below the 16 ms budget
+on every GPU we've tested; very low VA combined with high DPR can
+push L to 3 (the cap is `blurMaxLevel`), which is the worst case.
 
 The downsample step is just the prep shader rebound to render an FBO into a
 half-size FBO; with `MIN_FILTER = LINEAR`, sampling at the centre of every

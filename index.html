@@ -757,9 +757,13 @@ void main() {
        *    (downsample N times)    pure passthrough; LINEAR filter on the
        *                            source gives a 2x2 box filter for free
        *    blur H -> pingFbo[L]    separable Gaussian, weights baked in JS
-       *    blur V -> srcFbo[L]     overwrites the now-redundant src
-       *    upsample -> screen      bilinear MAG_FILTER smooths the final
-       *                            level back up to full resolution
+       *    blur V -> screen        runs at full canvas resolution while
+       *                            still sampling pingFbo[L] -- the 13
+       *                            bilinear-tap fetches reconstruct the
+       *                            Gaussian-convolved image at full-res
+       *                            pixel positions, replacing the naive
+       *                            bilinear MAG_FILTER upsample we used
+       *                            to do as a separate final pass.
        *
        *  When blur is off (sigma == 0) the pipeline collapses to a single
        *  prep pass straight to the default framebuffer. */
@@ -788,10 +792,8 @@ void main() {
 
         const target = this.blurSrcFbos[level];
         const ping = this.blurPingFbos[level];
-        this._runBlur(target.tex, ping.fbo, ping.w, ping.h, sigmaAtLevel, true);
-        this._runBlur(ping.tex, target.fbo, target.w, target.h, sigmaAtLevel, false);
-
-        this._runPrep(target.tex, null, w, h, false);
+        this._runBlur(target.tex, target.w, target.h, ping.fbo, ping.w, ping.h, sigmaAtLevel, true);
+        this._runBlur(ping.tex, ping.w, ping.h, null, w, h, sigmaAtLevel, false);
       },
 
       /** Choose the smallest power-of-two downsample level whose
@@ -847,14 +849,28 @@ void main() {
         });
       },
 
-      _runBlur(srcTex, dstFbo, dstW, dstH, sigma, horizontal) {
+      /** Apply a single (horizontal or vertical) blur pass.
+       *
+       *  The kernel is defined in *source-texel* space -- one unit
+       *  offset in the kernel means one source pixel -- so uTexelStep
+       *  references the source dimensions, never the destination's.
+       *  When src and dst are the same resolution (the H pass and the
+       *  intermediate V passes during the downsample chain) this is the
+       *  obvious thing. The interesting case is the *final* V pass,
+       *  which we run with src at the L-level resolution but dst at
+       *  full canvas resolution: the shader's bilinear taps then
+       *  reconstruct the Gaussian-convolved image at full-res pixel
+       *  positions from the L-level H-blurred input, replacing the
+       *  separate naive bilinear upsample we used to do as a final
+       *  prep-shader passthrough. */
+      _runBlur(srcTex, srcW, srcH, dstFbo, dstW, dstH, sigma, horizontal) {
         const gl = this.gl, u = this.blurUniforms;
         const { weights, offsets } = this._gaussianWeights(sigma);
         this._drawQuad(this.blurProgram, srcTex, dstFbo, dstW, dstH, () => {
           gl.uniform1fv(u.uWeights, weights);
           gl.uniform1fv(u.uOffsets, offsets);
-          if (horizontal) gl.uniform2f(u.uTexelStep, 1 / dstW, 0);
-          else            gl.uniform2f(u.uTexelStep, 0, 1 / dstH);
+          if (horizontal) gl.uniform2f(u.uTexelStep, 1 / srcW, 0);
+          else            gl.uniform2f(u.uTexelStep, 0, 1 / srcH);
         });
       },
 
