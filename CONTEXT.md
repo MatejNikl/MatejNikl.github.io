@@ -19,13 +19,16 @@ Controls are anchored top-right unless noted.
 - **Blur**: Toggles the acuity simulation. When on, a **Sharpness** slider appears at
   the bottom (still driven by visual acuity internally, e.g. 0.10 ≈ 20/200 — higher
   value means sharper / less blur).
-- **Freeze**: Pauses the render loop on the current frame. Toggling Grayscale,
-  Grayscale type, Blur, or the Sharpness slider while frozen redraws the held
-  frame immediately — Glare changes still talk to the camera but do not affect
-  the held image. Tap again to resume the live feed.
-- **Photo**: Captures the current canvas (live or frozen) to a PNG and offers it
-  via the Web Share API where available, falling back to a hidden `<a download>`
-  click. Filename is `achromat-YYYY-MM-DD_HH-MM-SS.png`.
+- **Freeze**: Pauses the render loop on the current frame and reveals the
+  **Photo** pill (which is otherwise hidden — saving a still only makes sense
+  on a held frame the user has chosen to keep). Toggling Grayscale, Grayscale
+  type, Blur, or the Sharpness slider while frozen redraws the held frame
+  immediately — Glare changes still talk to the camera but do not affect the
+  held image. Tap again to resume the live feed; the **Photo** pill hides
+  again.
+- **Photo**: Visible only while frozen. Captures the current canvas to a PNG
+  and offers it via the Web Share API where available, falling back to a
+  hidden `<a download>` click. Filename is `achromat-YYYY-MM-DD_HH-MM-SS.png`.
 - **Glare**: Shown only when `getCapabilities()` reports `exposureMode`
   including `manual` and an `exposureTime` range. **On by default** with
   **software auto-exposure** enabled — the app measures average frame brightness

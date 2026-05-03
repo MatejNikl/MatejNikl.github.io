@@ -144,7 +144,7 @@
     <button type="button" id="btn-gray" class="pill on" aria-pressed="true" title="Turn off to see the camera in full color">Grayscale</button>
     <button type="button" id="btn-blur" class="pill on" aria-pressed="true">Blur</button>
     <button type="button" id="btn-freeze" class="pill" aria-pressed="false" title="Freeze the current frame">Freeze</button>
-    <button type="button" id="btn-photo" class="pill" aria-pressed="false" title="Save the current frame as a photo">Photo</button>
+    <button type="button" id="btn-photo" class="pill hidden" title="Save the current frame as a photo">Photo</button>
     <button type="button" id="btn-et" class="pill on hidden" aria-pressed="true" title="Simulates glare / photophobia in bright conditions">Glare</button>
     <button type="button" id="btn-fs" class="pill hidden" aria-pressed="false" title="Toggle fullscreen mode">Fullscreen</button>
     <button type="button" id="btn-settings" class="pill pill-gear" aria-pressed="false" aria-haspopup="true" aria-expanded="false" title="Settings">&#x2699;</button>
@@ -1232,6 +1232,7 @@ void main() {
       toggleFreeze() {
         this.frozen = !this.frozen;
         this.setPillState(this.btnFreeze, this.frozen);
+        this.btnPhoto.classList.toggle('hidden', !this.frozen);
         if (this.frozen) {
           if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = null; }
         } else {
