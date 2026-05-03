@@ -273,21 +273,14 @@ void main() {
     gl_FragColor = c;
 }`;
 
-    // Separable Gaussian blur. Each off-center "tap" in this shader is a
-    // *bilinear* sample positioned between two adjacent unit-pixel
-    // offsets, weighted by the sum of the two underlying Gaussian
-    // weights. The GPU's hardware bilinear filter computes the same
-    // weighted blend a pair of point samples would, for the cost of one
-    // fetch -- so MAX_BLUR_TAPS_HALF=6 paired taps reach 12 unit pixels
-    // out from the center while costing only 13 texture fetches per
-    // pixel per pass (1 center + 6*2 off-center). That doubles the
-    // kernel's reach vs naive unit-spaced sampling at the same shader
-    // cost. Weights and offsets are baked per-frame in JS from the
-    // current sigma; pairs whose underlying Gaussian weights both fall
-    // below the cutoff get a zero weight, so the corresponding fetch
-    // multiplies by zero (we still run the full unrolled loop because
-    // a static loop bound is simpler than a dynamic one and the
-    // wasted work is well below the noise floor at this kernel size).
+    // Separable Gaussian blur via bilinear-tap sampling: each
+    // off-centre fetch is a hardware-bilinear sample positioned
+    // between two adjacent unit-pixel offsets, so MAX_BLUR_TAPS_HALF
+    // paired taps reach 2*MAX_BLUR_TAPS_HALF unit pixels from the
+    // centre while costing one texture fetch each. Weights & offsets
+    // for the current sigma are baked per-frame in JS by
+    // `_gaussianWeights`. The full algorithm and the rationale for
+    // the constants are documented in CONTEXT.md.
     const MAX_BLUR_TAPS_HALF = 6;
     const BLUR_FRAG_SRC = `${FRAG_PRECISION}
 uniform sampler2D uSrc;
@@ -831,22 +824,20 @@ void main() {
         this._runPrep(target.tex, null, w, h, false);
       },
 
-      /** Choose the smallest power-of-two downsample level whose
-       *  sigma-at-level stays within the bilinear-tap kernel's
-       *  effective half-width (the kernel reaches +/-12 unit pixels,
-       *  so sigmaCap = 3 still covers ~+/-4 sigma -- 99.99% kernel
-       *  mass). The cap is deliberately *not* the kernel's true limit:
-       *  picking a less aggressive level means the blur runs on a
-       *  larger framebuffer, so the bilinear *upsample* back to full
-       *  resolution doesn't have to invent as many pixels and the
-       *  visible grid of the downsample chain stops bleeding through.
-       *  At default VA 0.10 on a phone in portrait (cover scale ~2.4)
-       *  this picks level 1 (1/2 res) instead of level 3 (1/8 res),
-       *  which is the practical artifact-killer.
+      /** Choose the smallest downsample level L such that the
+       *  per-level sigma `sigma / 2^L` fits within the kernel's
+       *  effective reach. The bilinear-tap kernel covers +/-12 unit
+       *  pixels (= 2 * MAX_BLUR_TAPS_HALF) per pass, so we cap
+       *  sigma-at-level at 3 -- that keeps the +/-4 sigma window of a
+       *  true Gaussian inside the kernel (~99.99% mass), and bigger
+       *  blurs are handled by halving resolution rather than by
+       *  growing the kernel.
        *
-       *  blurMaxLevel determines the absolute floor: VA 0.05 on a
-       *  high-DPR phone reaches ~14 internal px, so level 2 is still
-       *  needed there. */
+       *  blurMaxLevel is the absolute floor on level depth so that
+       *  even very low VA values can't keep halving forever; at level
+       *  N the FBO is 1/2^N of canvas size in each axis, and a deep
+       *  chain makes the final bilinear MAG_FILTER upsample more
+       *  visible. */
       _pickBlurLevel(sigma) {
         const sigmaCap = 3;
         let level = 0;
