@@ -187,27 +187,34 @@ Downsampling first lets us keep that same small kernel and still cover any
 radius — at half resolution one full-res sigma costs half a kernel pixel.
 
 ```
-videoTex --(prep PRE_BLUR: linearise + flipY)-> srcFbo[0]    full res
-srcFbo[0] --(passthrough, LINEAR filter)------> srcFbo[1]    half res
-srcFbo[1] --(passthrough, LINEAR filter)------> srcFbo[2]    quarter res
-srcFbo[L] --(blur H, σ_at_level)--------------> pingFbo[L]   L-level res
-pingFbo[L] --(blur V, σ_at_level)-------------> srcFbo[L]    L-level res
-srcFbo[L] --(prep POST_BLUR: gray + sRGB)-----> default framebuffer (screen)
+videoTex --(prep LINEARISE: sRGB->linear + flipY)-> srcFbo[0]    full res
+srcFbo[0] --(passthrough, LINEAR filter)----------> srcFbo[1]    half res
+srcFbo[1] --(passthrough, LINEAR filter)----------> srcFbo[2]    quarter res
+srcFbo[L] --(blur H, σ_at_level)------------------> pingFbo[L]   L-level res
+pingFbo[L] --(blur V, σ_at_level)-----------------> srcFbo[L]    L-level res
+srcFbo[L] --(prep FINISH: gray + linear->sRGB)----> default framebuffer (screen)
 ```
 
 The pipeline is **linear-light throughout the blur**. The prep
-shader has four modes selected by a `uMode` uniform:
+shader has three modes selected by a `uMode` uniform, with an
+extra `uInputIsLinear` flag that tells `FINISH` what colour space
+its input is in:
 
-- `DIRECT` — sRGB in, optional grayscale, sRGB out. Used only when
-  blur is off; collapses the whole pipeline to one pass.
-- `PRE_BLUR` — sRGB in, linearise via the IEC 61966-2-1 transfer
+- `LINEARISE` — sRGB in, linearise via the IEC 61966-2-1 transfer
   function, write linear. Entry point of the blur pipeline.
 - `PASSTHROUGH` — copy with optional flipY, no encoding flips.
   Used between FBOs in the downsample chain so they stay linear.
-- `POST_BLUR` — linear in, optional grayscale (in linear space for
-  the colorimetric `scotopic` weighting; or via a re-encode for
-  the perceptual `plain` Rec. 601 weighting), sRGB-encode, write
-  sRGB to the default framebuffer.
+- `FINISH` — optional grayscale, sRGB out. Used both as the last
+  step of the blur pipeline (`uInputIsLinear = true`, sample from
+  `srcFbo[L]`) and as the only pass when blur is off
+  (`uInputIsLinear = false`, sample directly from the sRGB video
+  texture). Grayscale is applied in the reference space of each
+  weighting: `scotopic` is colorimetric and operates on linear
+  light Y; `plain` is the naive Rec. 601 luma on sRGB-encoded
+  values (Y' rather than Y). The shader linearises or
+  re-encodes only when the input doesn't already match the
+  weighting's reference space, so the blur-off + grayscale-off
+  combination collapses to a one-shader straight texture copy.
 
 Doing the convolution on linear values is what makes glare halos
 and bright-against-dark transitions look right. Averaging
@@ -259,13 +266,13 @@ block averages four pixels for free, which is the box filter we
 want to suppress aliasing of any high-frequency detail beyond the
 per-level Nyquist limit.
 
-The final upsample is the prep shader bound in `POST_BLUR` mode,
-sampling `srcFbo[L]` with hardware bilinear `MAG_FILTER` into the
-default framebuffer. That's a naive bilinear stretch combined with
-the grayscale + sRGB-encode work — cheap and usually fine for
-`L ≤ 2`. Browsers do something similar; iOS Safari and Skia both
-rely on their downsample factor staying small so a plain bilinear
-upsample is invisible.
+The final upsample is the prep shader bound in `FINISH` mode
+(`uInputIsLinear = true`), sampling `srcFbo[L]` with hardware
+bilinear `MAG_FILTER` into the default framebuffer. That's a naive
+bilinear stretch combined with the grayscale + sRGB-encode work —
+cheap and usually fine for `L ≤ 2`. Browsers do something similar;
+iOS Safari and Skia both rely on their downsample factor staying
+small so a plain bilinear upsample is invisible.
 
 The blur shader (`BLUR_FRAG_SRC`) does a separable Gaussian using
 **bilinear-tap sampling**: each off-centre fetch is a bilinear
