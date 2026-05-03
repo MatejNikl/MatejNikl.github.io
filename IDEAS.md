@@ -113,6 +113,45 @@ the Blur toggle or sit as its own slider in **Settings**. This is
 arguably the most physiologically meaningful gap left in the
 simulation.
 
+### Linear-light blur — impact ★ · effort ★★
+
+The shader's separable Gaussian currently convolves **gamma-encoded
+sRGB** values, which is what CSS `filter: blur()` does on Chromium
+today (so the two engines stay calibrated against each other). A
+physically correct Gaussian convolves **linear-light** values
+(proportional to radiance) and only re-encodes to sRGB at the end:
+bright highlights bloom outward instead of dimming, and edges between
+bright and dark regions get a midtone that's brighter (correct) rather
+than darker (current).
+
+The plumbing is already there — `srgbToLinear` and `linearToSrgb` sit
+in `PREP_FRAG_SRC` for the grayscale luminance dot product. To make
+the whole pipeline linear: `srgbToLinear` at the prep stage, keep the
+mip / blur / upsample passes linear, then `linearToSrgb` in the final
+upsample-to-screen pass.
+
+Three reasons it's been deferred rather than done:
+
+1. **8-bit precision.** Linear values stored in an 8-bit RGBA texture
+   alias visibly in shadows. The clean fix needs an sRGB-aware
+   framebuffer (`EXT_sRGB` in WebGL 1, `GL_SRGB8_ALPHA8` in WebGL 2),
+   with feature detection and a gamma-blur fallback. Half-float FBOs
+   are an alternative but `OES_texture_half_float` + the matching
+   color-buffer extension aren't universally supported on phone GPUs.
+2. **Diverges from the CSS A/B reference.** We just calibrated the
+   shader to match `filter: blur()` within ~2 % across the whole VA
+   slider; switching to linear-light invalidates that match. The
+   "Blur engine" select in Settings would then visibly differ.
+3. **Marginal benefit for our content.** Achromatopsia simulation is
+   grayscale-dominant and indoor-ambient-scene-dominant; the linear /
+   gamma difference is most obvious on bright highlights against dark
+   backgrounds (sun, lamps, headlights), which is *not* the typical
+   demo case.
+
+Verdict: file as a "do it properly when we move to WebGL 2" item;
+gating on the sRGB FBO extension keeps it from becoming a regression
+on older GPUs.
+
 ### Scotopic adaptation latency — impact ★★ · effort ★
 
 The software auto-exposure now in place (commit `c6df039`) makes this
