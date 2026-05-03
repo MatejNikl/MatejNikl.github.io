@@ -194,13 +194,42 @@
     </div>
   </div>
   <script>
+    // The varying is declared highp explicitly so it survives the
+    // vertex -> fragment interpolation at full 32-bit precision on
+    // every GPU we care about. GLSL ES 1.00 lets each stage have its
+    // own default precision and lets unqualified varyings take the
+    // fragment side's default; on a Mali / PowerVR / Adreno running
+    // mediump that quantizes vTexCoord to ~10 mantissa bits, which is
+    // fine when vTexCoord lands on integer texel centres but causes
+    // visible banding the moment a shader takes sub-texel deltas
+    // between adjacent fragments. Belt-and-suspenders: declare highp
+    // in both stages.
     const VERT_SRC = `
 attribute vec2 aPos;
-varying vec2 vTexCoord;
+varying highp vec2 vTexCoord;
 void main() {
     vTexCoord = aPos * 0.5 + 0.5;
     gl_Position = vec4(aPos, 0.0, 1.0);
 }`;
+
+    // Fragment shader precision header. The blur shader genuinely
+    // wants highp because its kernel offsets multiply uTexelStep
+    // (small) by uOffsets[i] (small) and add to vTexCoord -- precision
+    // of the result has to survive being used as a texture coordinate.
+    // Prep / downsample are simpler and would get away with mediump,
+    // but using the same header everywhere is one less footgun. On the
+    // (rare) GPU without fragment-shader highp the macro is undefined
+    // so we fall back to mediump and accept whatever artifacts that
+    // brings. Don't bother with getShaderPrecisionFormat: Safari's
+    // implementation has been buggy for years (it returns wrong
+    // numbers regardless of the actual hardware) and the macro is
+    // exactly what the spec gave us to avoid that runtime question.
+    const FRAG_PRECISION = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif`;
 
     // Source-prep / passthrough shader: samples uSrc, optionally flips the
     // y axis (true for the upside-down video texture, false for FBOs that
@@ -208,13 +237,12 @@ void main() {
     // grayscale conversion. Bilinear MIN_FILTER on the source texture
     // doubles this as a clean 2x2 box downsample when the output is
     // exactly half the source resolution.
-    const PREP_FRAG_SRC = `
-precision mediump float;
+    const PREP_FRAG_SRC = `${FRAG_PRECISION}
 uniform sampler2D uSrc;
 uniform bool uGrayscale;
 uniform int uGrayMode;
 uniform bool uFlipY;
-varying vec2 vTexCoord;
+varying highp vec2 vTexCoord;
 
 vec3 srgbToLinear(vec3 c) {
     vec3 lo = c / 12.92;
@@ -261,23 +289,12 @@ void main() {
     // a static loop bound is simpler than a dynamic one and the
     // wasted work is well below the noise floor at this kernel size).
     const MAX_BLUR_TAPS_HALF = 6;
-    // Precision matters here: the final V pass crosses resolutions
-    // (sources at L-level, renders at full canvas), so vTexCoord at
-    // adjacent output rows differs by a fraction of a source texel.
-    // At mediump (16-bit half-float on phones) those tiny deltas
-    // quantize to the same value across runs of adjacent output rows,
-    // and you get visible horizontal banding wherever the quantized
-    // bucket boundary falls. highp keeps the deltas distinct. Fragment-
-    // shader highp is optional in WebGL 1, but supported on every GPU
-    // we actually care about; the call site feature-detects and falls
-    // back to mediump on the rare device without it.
-    const BLUR_FRAG_SRC = (precision) => `
-precision ${precision} float;
+    const BLUR_FRAG_SRC = `${FRAG_PRECISION}
 uniform sampler2D uSrc;
 uniform vec2 uTexelStep;
 uniform float uWeights[${MAX_BLUR_TAPS_HALF + 1}];
 uniform float uOffsets[${MAX_BLUR_TAPS_HALF}];
-varying vec2 vTexCoord;
+varying highp vec2 vTexCoord;
 
 void main() {
     vec4 sum = texture2D(uSrc, vTexCoord) * uWeights[0];
@@ -289,8 +306,7 @@ void main() {
     gl_FragColor = sum;
 }`;
 
-    const DS_FRAG_SRC = `
-precision mediump float;
+    const DS_FRAG_SRC = `${FRAG_PRECISION}
 uniform sampler2D uSrc;
 uniform vec2 uSrcSize;
 void main() {
@@ -504,16 +520,10 @@ void main() {
         const vs = this._compileShader(gl.VERTEX_SHADER, VERT_SRC, 'Vertex shader');
         if (!vs) return false;
 
-        const highp = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT);
-        const blurPrecision = (highp && highp.precision > 0) ? 'highp' : 'mediump';
-        if (blurPrecision !== 'highp') {
-          console.warn('Fragment-shader highp unavailable; blur may show banding on cross-resolution passes.');
-        }
-
         const prep = this._buildProgram(vs, PREP_FRAG_SRC, 'Prep',
           ['uSrc', 'uGrayscale', 'uGrayMode', 'uFlipY']);
         if (!prep) return false;
-        const blur = this._buildProgram(vs, BLUR_FRAG_SRC(blurPrecision), 'Blur',
+        const blur = this._buildProgram(vs, BLUR_FRAG_SRC, 'Blur',
           ['uSrc', 'uTexelStep', 'uWeights', 'uOffsets']);
         if (!blur) return false;
         const ds = this._buildProgram(vs, DS_FRAG_SRC, 'Downsample',
@@ -773,13 +783,20 @@ void main() {
        *    (downsample N times)    pure passthrough; LINEAR filter on the
        *                            source gives a 2x2 box filter for free
        *    blur H -> pingFbo[L]    separable Gaussian, weights baked in JS
-       *    blur V -> screen        runs at full canvas resolution while
-       *                            still sampling pingFbo[L] -- the 13
-       *                            bilinear-tap fetches reconstruct the
-       *                            Gaussian-convolved image at full-res
-       *                            pixel positions, replacing the naive
-       *                            bilinear MAG_FILTER upsample we used
-       *                            to do as a separate final pass.
+       *    blur V -> srcFbo[L]     overwrites the now-redundant src
+       *    upsample -> screen      bilinear MAG_FILTER smooths the final
+       *                            level back up to full resolution
+       *
+       *  Design discipline (taken from Skia's GPU blur engine): the blur
+       *  shader is *single-resolution*. Both H and V passes have src and
+       *  dst at the L-level resolution, so vTexCoord lands on integer
+       *  texel centres and we never multiply tiny sub-texel deltas by
+       *  large per-fragment coords. Resolution changes happen in
+       *  separate passthrough passes that have nothing else going on.
+       *  An earlier revision tried to fold the final upsample into the
+       *  V pass; that caused horizontal banding on Mali GPUs because
+       *  cross-resolution sampling exposes mediump quantization in the
+       *  varying interpolation, and is now reverted.
        *
        *  When blur is off (sigma == 0) the pipeline collapses to a single
        *  prep pass straight to the default framebuffer. */
@@ -808,8 +825,10 @@ void main() {
 
         const target = this.blurSrcFbos[level];
         const ping = this.blurPingFbos[level];
-        this._runBlur(target.tex, target.w, target.h, ping.fbo, ping.w, ping.h, sigmaAtLevel, true);
-        this._runBlur(ping.tex, ping.w, ping.h, null, w, h, sigmaAtLevel, false);
+        this._runBlur(target.tex, ping.fbo, ping.w, ping.h, sigmaAtLevel, true);
+        this._runBlur(ping.tex, target.fbo, target.w, target.h, sigmaAtLevel, false);
+
+        this._runPrep(target.tex, null, w, h, false);
       },
 
       /** Choose the smallest power-of-two downsample level whose
@@ -865,62 +884,54 @@ void main() {
         });
       },
 
-      /** Apply a single (horizontal or vertical) blur pass.
-       *
-       *  The kernel is defined in *source-texel* space -- one unit
-       *  offset in the kernel means one source pixel -- so uTexelStep
-       *  references the source dimensions, never the destination's.
-       *  When src and dst are the same resolution (the H pass and the
-       *  intermediate V passes during the downsample chain) this is the
-       *  obvious thing. The interesting case is the *final* V pass,
-       *  which we run with src at the L-level resolution but dst at
-       *  full canvas resolution: the shader's bilinear taps then
-       *  reconstruct the Gaussian-convolved image at full-res pixel
-       *  positions from the L-level H-blurred input, replacing the
-       *  separate naive bilinear upsample we used to do as a final
-       *  prep-shader passthrough. */
-      _runBlur(srcTex, srcW, srcH, dstFbo, dstW, dstH, sigma, horizontal) {
+      /** Apply a single (horizontal or vertical) blur pass at fixed
+       *  resolution -- src and dst always have the same dimensions, so
+       *  one kernel-unit step equals one destination pixel which equals
+       *  one source pixel and uTexelStep is unambiguous. */
+      _runBlur(srcTex, dstFbo, dstW, dstH, sigma, horizontal) {
         const gl = this.gl, u = this.blurUniforms;
         const { weights, offsets } = this._gaussianWeights(sigma);
         this._drawQuad(this.blurProgram, srcTex, dstFbo, dstW, dstH, () => {
           gl.uniform1fv(u.uWeights, weights);
           gl.uniform1fv(u.uOffsets, offsets);
-          if (horizontal) gl.uniform2f(u.uTexelStep, 1 / srcW, 0);
-          else            gl.uniform2f(u.uTexelStep, 0, 1 / srcH);
+          if (horizontal) gl.uniform2f(u.uTexelStep, 1 / dstW, 0);
+          else            gl.uniform2f(u.uTexelStep, 0, 1 / dstH);
         });
       },
 
-      /** Build a normalised Gaussian kernel collapsed onto bilinear taps.
-       *  Returns { weights, offsets } where:
-       *    weights[0]      = center weight
+      /** Build a normalised Gaussian kernel collapsed onto bilinear
+       *  taps. Returns { weights, offsets } where:
+       *    weights[0]      = centre weight
        *    weights[1..N]   = paired weight for the k-th bilinear tap
        *                      (applied to both the + and - direction)
        *    offsets[0..N-1] = sub-pixel offset of the k-th paired tap
        *  with N = MAX_BLUR_TAPS_HALF.
        *
        *  Pair k (1-indexed) covers the underlying unit-pixel offsets
-       *  (2k-1, 2k); the bilinear sample's offset is the centre of mass
-       *  of the two underlying Gaussian weights, and its weight is
-       *  their sum. The GPU's hardware bilinear filter then blends the
-       *  two adjacent texels in exactly the proportion the unit-spaced
-       *  Gaussian would have summed them at -- one fetch, two taps'
-       *  worth of mass.
+       *  (2k-1, 2k); the bilinear sample's offset is the centre of
+       *  mass of the two underlying Gaussian weights, and its weight
+       *  is their sum (Sigg & Hadwiger 2005, also Skia's
+       *  Compute1DBlurLinearKernel). The GPU's hardware bilinear
+       *  filter then blends the two adjacent texels in exactly the
+       *  proportion the unit-spaced Gaussian would have summed them
+       *  at -- one fetch, two taps' worth of mass.
        *
-       *  Underlying weights below a 1e-3 cutoff are zeroed before
-       *  pairing so faraway taps contribute nothing. If both members of
-       *  a pair are zeroed the paired weight is zero too; the offset
-       *  then doesn't matter (the fetch is multiplied by zero) so we
-       *  pick the pair's nominal centre to keep the value finite. */
+       *  Pixels beyond `radius = ceil(3*sigma)` from the centre are
+       *  zeroed -- that's Skia's SkBlurEngine::SigmaToRadius rule and
+       *  it captures ~99.7% of a true Gaussian's mass, plenty for
+       *  visual purposes. If both members of a pair are zeroed the
+       *  paired weight is zero too; the offset then doesn't matter
+       *  (the fetch is multiplied by zero) so we pick the pair's
+       *  nominal centre to keep the value finite. */
       _gaussianWeights(sigma) {
         const halfPairs = MAX_BLUR_TAPS_HALF;
         const halfTaps = halfPairs * 2;
-        const cutoff = 1e-3;
+        const radius = Math.ceil(3 * sigma);
         const inv2s2 = 1 / (2 * sigma * sigma);
 
         const g = new Float32Array(halfTaps + 1);
         for (let i = 0; i <= halfTaps; i++) {
-          const v = Math.exp(-(i * i) * inv2s2);
-          g[i] = (i === 0 || v >= cutoff) ? v : 0;
+          g[i] = i <= radius ? Math.exp(-(i * i) * inv2s2) : 0;
         }
 
         const weights = new Float32Array(halfPairs + 1);

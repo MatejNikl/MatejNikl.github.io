@@ -191,73 +191,113 @@ videoTex --(prep: grayscale + flipY)----------> srcFbo[0]    full res
 srcFbo[0] --(passthrough, LINEAR filter)------> srcFbo[1]    half res
 srcFbo[1] --(passthrough, LINEAR filter)------> srcFbo[2]    quarter res
 srcFbo[L] --(blur H, σ_at_level)--------------> pingFbo[L]   L-level res
-pingFbo[L] --(blur V, σ_at_level, full-res)---> default framebuffer (screen)
+pingFbo[L] --(blur V, σ_at_level)-------------> srcFbo[L]    L-level res
+srcFbo[L] --(passthrough, MAG_FILTER bilinear)> default framebuffer (screen)
 ```
 
-The final V pass is rendered at full canvas resolution while still
-sampling from `pingFbo[L]` at L-level resolution. Each output pixel is
-the result of 13 hardware-bilinear-filtered fetches into the L-level
-H-blurred buffer, with sub-pixel offsets chosen so the kernel
-reconstructs the continuous-space Gaussian — that's much higher
-quality than running V at L-level and then doing a separate naive
-bilinear MAG_FILTER upsample to the screen, which is what an earlier
-revision did. The trade-off is GPU cost: the V pass now shades all
-`w*h` full-resolution pixels instead of `lw*lh` L-level ones, so
-total fragment work for the final pass goes up by a factor of `4^L`.
-At default settings (L = 1 or 2) this is well below the 16 ms budget
-on every GPU we've tested; very low VA combined with high DPR can
-push L to 3 (the cap is `blurMaxLevel`), which is the worst case.
+**Design discipline (taken from Skia):** the blur shader is
+*single-resolution*. Both H and V passes have src and dst at the
+same L-level resolution, so `vTexCoord` lands on integer texel
+centres and the shader never multiplies tiny sub-texel deltas by
+large per-fragment coordinates. Resolution changes happen in
+separate passthrough passes that have nothing else going on. An
+earlier revision tried to fold the final upsample into the V pass —
+the V pass would shade at full canvas resolution while sampling from
+the L-level H-blurred buffer — under the theory that the bilinear
+taps would do high-quality reconstruction "for free." That caused
+visible horizontal banding on Mali GPUs because GLSL ES 1.00
+defaults `varying`s to whatever default precision the receiving
+stage declares, which on most mobile GPUs is mediump (16-bit
+half-float, ~10 mantissa bits). When `vTexCoord` lands on integer
+texel centres the quantization is invisible; when adjacent fragments
+need sub-source-texel deltas, those deltas underflow the half-float
+mantissa and a run of adjacent rows samples the same source row.
+Skia avoids the whole class of bug by simply never crossing
+resolutions inside the blur shader — and does its resize as a
+separate generic pass — and we follow suit.
 
-The downsample step is just the prep shader rebound to render an FBO into a
-half-size FBO; with `MIN_FILTER = LINEAR`, sampling at the centre of every
-2×2 source block averages four pixels for free, which is the box filter we
-want to suppress aliasing of any high-frequency detail beyond the per-level
-Nyquist limit.
+The downsample step is just the prep shader rebound to render an
+FBO into a half-size FBO; with `MIN_FILTER = LINEAR`, sampling at
+the centre of every 2×2 source block averages four pixels for free,
+which is the box filter we want to suppress aliasing of any
+high-frequency detail beyond the per-level Nyquist limit.
+
+The final upsample is again the prep shader bound as a passthrough,
+sampling `srcFbo[L]` with hardware bilinear `MAG_FILTER` into the
+default framebuffer. That's a naive bilinear stretch — cheap and
+usually fine for `L ≤ 2`. Browsers do something similar; iOS Safari
+and Skia both rely on their downsample factor staying small so a
+plain bilinear upsample is invisible.
 
 The blur shader (`BLUR_FRAG_SRC`) does a separable Gaussian using
-**bilinear-tap sampling**: each off-center fetch is a bilinear sample
-positioned between two adjacent unit-pixel offsets, weighted by the
-sum of the two underlying Gaussian weights. The GPU's hardware
+**bilinear-tap sampling**: each off-centre fetch is a bilinear
+sample positioned between two adjacent unit-pixel offsets, weighted
+by the sum of the two underlying Gaussian weights. The hardware
 bilinear filter blends the two adjacent texels in exactly the
 proportion the unit-spaced Gaussian would have summed them at, for
-the cost of *one* fetch. So `MAX_BLUR_TAPS_HALF = 6` paired off-center
+the cost of *one* fetch. `MAX_BLUR_TAPS_HALF = 6` paired off-centre
 taps reach **12 unit pixels** out from the centre (each side) while
 costing only 13 texture fetches per pixel per pass (1 centre + 12
 off-centre). That doubles the kernel's reach vs naive unit-spaced
-sampling at the same shader cost.
+sampling at the same shader cost. This is exactly the algorithm
+Skia's `Compute1DBlurLinearKernel` builds (`W' = Wi + Wj`,
+`offset = Wj/(Wi+Wj)`); we verified our output is bit-equivalent
+(<1e-15 max error vs a naive 25-tap kernel) before relying on it.
 
 Weights and offsets are baked in JS each frame from the per-level
-`σ_kernel = σ / 2^L`, where the host picks a **downsample level** so
-that `σ_kernel` stays under `sigmaCap = 3 px`. The cap is well inside
-the 12-pixel-reach kernel's true limit (≈ ±4σ at σ_kernel = 3, ~99.99 %
-mass) — what limits us in practice is not Gaussian truncation but the
-**bilinear upsample** at the end of the chain: each downsample level
-halves resolution in both axes, so level `L` means the blur runs on a
-framebuffer of `1/4^L` the pixels and the final upsample then has to
-reconstruct `4^L − 1` pixels per source pixel by linear interpolation.
-At `L = 3` (1/8 res) that grid is visible as faint pixel-step banding
-on high-DPR phones; capping `σ_kernel` at 3 instead of saturating the
-kernel keeps `L ≤ 2` for typical settings, which kills the artifact.
-Underlying Gaussian weights below a 1e-3 cutoff are zeroed before
-pairing; if both members of a pair end up at zero the paired weight is
-zero too (the fetch multiplies by zero) and the offset is set to the
-pair's nominal centre to keep the value finite. The shader always runs
-the full unrolled 6-iteration loop — the wasted work for zero-weight
-pairs is well below the noise floor and avoiding a dynamic loop bound
-keeps both the shader source and the host call site simpler.
+`σ_kernel = σ / 2^L`, where the host picks a **downsample level**
+so that `σ_kernel` stays under `sigmaCap = 3 px`. Underlying
+Gaussian weights at unit offsets beyond `radius = ceil(3·σ_kernel)`
+from the centre are zeroed (Skia's `SkBlurEngine::SigmaToRadius`
+rule, capturing ~99.7% of a true Gaussian's mass). If both members
+of a pair are zeroed the paired weight is zero too and the offset
+is set to the pair's nominal centre to keep the value finite. The
+shader always runs the full unrolled 6-iteration loop — the wasted
+work for zero-weight pairs is well below the noise floor and
+avoiding a dynamic loop bound keeps both the shader source and the
+host call site simpler.
+
+**Precision plumbing.** `vTexCoord` is declared `varying highp vec2`
+in *both* the vertex shader and every fragment shader that uses it
+(belt-and-suspenders), and each fragment shader's default precision
+is `highp` if the GPU advertises it via the
+`GL_FRAGMENT_PRECISION_HIGH` preprocessor macro — otherwise
+mediump. We rely on the macro instead of
+`gl.getShaderPrecisionFormat()` because Safari has had a long-
+standing bug where the runtime query returns wrong values
+regardless of actual hardware support. Devices without
+fragment-shader highp will fall back gracefully to mediump; on
+those we may see banding when the kernel evaluates near sub-texel
+boundaries, but the app still runs.
 
 When **Blur is off** the entire FBO chain is skipped and the prep
 shader draws straight to the default framebuffer. That keeps the
 blur-off cost identical to the non-blur path.
 
-> **Earlier attempt that didn't work.** Before the downsample chain, the
-> blur shader scaled tap *spacing* by σ at full resolution (a 9-tap kernel
-> with samples at offsets `±k·σ`). It correctly sums to 1, but at large σ
-> the taps land 5–22 pixels apart and skip everything between, so high-
-> frequency detail leaked through (the blur looked too weak) and the image
-> ghosted at offsets of `σ` (visible banding around VA 0.05). A true Gaussian
-> needs dense sampling within `±3σ`, which the downsample-first approach
-> recovers cheaply.
+> **Earlier attempt that didn't work.** Before the downsample
+> chain, the blur shader scaled tap *spacing* by σ at full
+> resolution (a 9-tap kernel with samples at offsets `±k·σ`). It
+> correctly sums to 1, but at large σ the taps land 5–22 pixels
+> apart and skip everything between, so high-frequency detail
+> leaked through (the blur looked too weak) and the image ghosted
+> at offsets of `σ` (visible banding around VA 0.05). A true
+> Gaussian needs dense sampling within `±3σ`, which the
+> downsample-first approach recovers cheaply.
+
+> **Earlier attempt that didn't work, take two.** A later revision
+> folded the final bilinear upsample into the V pass: V would shade
+> at full canvas resolution while sampling from `pingFbo[L]`,
+> theoretically replacing the naive bilinear MAG_FILTER upsample
+> with a high-quality Gaussian reconstruction. That caused
+> horizontal banding on Mali (and presumably other mobile GPUs)
+> because cross-resolution sampling exposes mediump quantization in
+> the varying interpolation, and `precision highp float` in the
+> fragment shader alone wasn't enough — the varying needed to be
+> declared highp explicitly. Even after fixing the precision, this
+> approach diverges from how Skia and the browser's `filter:
+> blur()` are structured (their blur shaders are
+> single-resolution; resize is a separate pass), so we reverted to
+> the same discipline.
 
 ### Why not `ctx.filter`?
 
