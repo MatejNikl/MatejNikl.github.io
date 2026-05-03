@@ -215,15 +215,23 @@ sampling at the same shader cost.
 
 Weights and offsets are baked in JS each frame from the per-level
 `σ_kernel = σ / 2^L`, where the host picks a **downsample level** so
-that `σ_kernel` stays small enough for the 12-pixel-reach kernel to
-still cover several sigmas. Underlying Gaussian weights below a 1e-3
-cutoff are zeroed before pairing; if both members of a pair end up at
-zero the paired weight is zero too (the fetch multiplies by zero) and
-the offset is set to the pair's nominal centre to keep the value
-finite. The shader always runs the full unrolled 6-iteration loop —
-the wasted work for zero-weight pairs is well below the noise floor
-and avoiding a dynamic loop bound keeps both the shader source and
-the host call site simpler.
+that `σ_kernel` stays under `sigmaCap = 3 px`. The cap is well inside
+the 12-pixel-reach kernel's true limit (≈ ±4σ at σ_kernel = 3, ~99.99 %
+mass) — what limits us in practice is not Gaussian truncation but the
+**bilinear upsample** at the end of the chain: each downsample level
+halves resolution in both axes, so level `L` means the blur runs on a
+framebuffer of `1/4^L` the pixels and the final upsample then has to
+reconstruct `4^L − 1` pixels per source pixel by linear interpolation.
+At `L = 3` (1/8 res) that grid is visible as faint pixel-step banding
+on high-DPR phones; capping `σ_kernel` at 3 instead of saturating the
+kernel keeps `L ≤ 2` for typical settings, which kills the artifact.
+Underlying Gaussian weights below a 1e-3 cutoff are zeroed before
+pairing; if both members of a pair end up at zero the paired weight is
+zero too (the fetch multiplies by zero) and the offset is set to the
+pair's nominal centre to keep the value finite. The shader always runs
+the full unrolled 6-iteration loop — the wasted work for zero-weight
+pairs is well below the noise floor and avoiding a dynamic loop bound
+keeps both the shader source and the host call site simpler.
 
 When **Blur is off** the entire FBO chain is skipped and the prep
 shader draws straight to the default framebuffer. That keeps the

@@ -795,13 +795,23 @@ void main() {
       },
 
       /** Choose the smallest power-of-two downsample level whose
-       *  sigma-at-level stays within the 13-tap kernel's effective
-       *  half-width (~4 sigma at sigma <= 1.5 px). blurMaxLevel
-       *  determines how aggressively we can shrink: VA 0.05 with the
-       *  display-scale correction reaches ~14 internal px on phones in
-       *  portrait, so a /16 quarter-of-a-quarter is sometimes needed. */
+       *  sigma-at-level stays within the bilinear-tap kernel's
+       *  effective half-width (the kernel reaches +/-12 unit pixels,
+       *  so sigmaCap = 3 still covers ~+/-4 sigma -- 99.99% kernel
+       *  mass). The cap is deliberately *not* the kernel's true limit:
+       *  picking a less aggressive level means the blur runs on a
+       *  larger framebuffer, so the bilinear *upsample* back to full
+       *  resolution doesn't have to invent as many pixels and the
+       *  visible grid of the downsample chain stops bleeding through.
+       *  At default VA 0.10 on a phone in portrait (cover scale ~2.4)
+       *  this picks level 1 (1/2 res) instead of level 3 (1/8 res),
+       *  which is the practical artifact-killer.
+       *
+       *  blurMaxLevel determines the absolute floor: VA 0.05 on a
+       *  high-DPR phone reaches ~14 internal px, so level 2 is still
+       *  needed there. */
       _pickBlurLevel(sigma) {
-        const sigmaCap = 1.5;
+        const sigmaCap = 3;
         let level = 0;
         let s = sigma;
         while (s > sigmaCap && level < this.blurMaxLevel) {
