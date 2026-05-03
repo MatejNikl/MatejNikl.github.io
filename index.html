@@ -289,8 +289,8 @@
       <p id="info-p3"></p>
       <h3 id="info-learn-more"></h3>
       <ul>
-        <li><a id="info-link-gard" href="https://rarediseases.info.nih.gov/diseases/5878/achromatopsia" target="_blank" rel="noopener noreferrer"></a></li>
-        <li><a id="info-link-network" href="https://www.achromatopsia.info/" target="_blank" rel="noopener noreferrer"></a></li>
+        <li><a id="info-link-1" target="_blank" rel="noopener noreferrer"></a></li>
+        <li><a id="info-link-2" target="_blank" rel="noopener noreferrer"></a></li>
       </ul>
       <div class="info-actions">
         <button type="button" id="info-share"></button>
@@ -512,10 +512,12 @@ void main() {
         aboutClose: 'Close',
         aboutP1: 'Achromatopsia (rod monochromacy) is a rare inherited eye condition affecting roughly 1 in 30,000 people. Affected eyes have no functioning cones \u2014 the retinal cells responsible for color vision and sharp daylight sight \u2014 and rely entirely on rods. The result is total color blindness, reduced visual acuity (typically around 20/200), and strong sensitivity to bright light.',
         aboutP2: 'This camera-based simulator approximates that experience for sighted viewers. Grayscale removes color the way a rod-only retina would. Blur simulates the reduced acuity \u2014 the Sharpness slider lets you tune how blurry. Glare locks the camera\u2019s exposure high so bright scenes wash out, mimicking how the lack of cone-driven adaptation makes daylight overwhelming.',
-        aboutP3: 'Built by a parent of a young achromat who is too young to describe how he sees the world. The goal is to give family, teachers, and therapists a usable approximation. The simulation is intentionally simple \u2014 it does not yet model contrast loss or nystagmus \u2014 and is best treated as a starting point for conversation, not a clinical tool.',
+        aboutP3: 'Built by a parent of a young achromat who is too young to describe how he sees the world. The goal is to give family, teachers, and therapists a usable approximation. One thing the simulator deliberately does not show is a shaking image \u2014 achromats have nystagmus (involuntary eye movements), but they don\u2019t perceive the world as moving, because the visual cortex develops alongside the oscillating retinal image. What nystagmus actually contributes is reduced acuity, which the Blur control already simulates. The simulation is otherwise intentionally simple (it does not yet model reduced contrast sensitivity, for instance) and is best treated as a starting point for conversation, not a clinical tool.',
         aboutLearnMore: 'Learn more',
-        aboutLinkGard: 'NIH GARD: Achromatopsia',
-        aboutLinkNetwork: 'Achromatopsia Network',
+        aboutLink1Url: 'https://rarediseases.info.nih.gov/diseases/15015/achromatopsia',
+        aboutLink1Label: 'NIH GARD: Achromatopsia',
+        aboutLink2Url: 'https://www.achromat.info/',
+        aboutLink2Label: 'Achromatopsia Network',
         aboutShare: 'Share this view',
         aboutShareCopied: 'Link copied',
         aboutShareFailed: 'Could not share link',
@@ -554,10 +556,12 @@ void main() {
         aboutClose: 'Zavřít',
         aboutP1: 'Achromatopsie (úplná tyčinková monochromacie) je vzácné dědičné onemocnění oka, které se vyskytuje přibližně u 1 z 30 000 lidí. Postižené oči nemají funkční čípky \u2014 buňky sítnice odpovědné za barevné vidění a ostrý zrak za denního světla \u2014 a spoléhají výhradně na tyčinky. Důsledkem je úplná barvoslepost, snížená zraková ostrost (typicky kolem 20/200) a silná citlivost na jasné světlo.',
         aboutP2: 'Tento simulátor využívá kameru telefonu a přibližuje tuto zkušenost vidoucím. Stupně šedi odstraňují barvu, podobně jako sítnice spoléhající jen na tyčinky. Rozmazání simuluje sníženou ostrost \u2014 posuvník Ostrost umožňuje ji doladit. Oslnění uzamkne expozici kamery na vysokých hodnotách, takže jasné scény vyběleně přesvítí, podobně jako u achromata, kterému chybí adaptace přes čípky.',
-        aboutP3: 'Aplikaci vytvořil rodič malého achromata, který je ještě příliš malý na to, aby popsal, jak svět vidí. Cílem je nabídnout rodině, učitelům a terapeutům použitelné přiblížení. Simulace je záměrně jednoduchá \u2014 zatím nemodeluje například ztrátu kontrastu nebo nystagmus \u2014 a je vhodná spíše jako východisko k rozhovoru, ne jako klinický nástroj.',
+        aboutP3: 'Aplikaci vytvořil rodič malého achromata, který je ještě příliš malý na to, aby popsal, jak svět vidí. Cílem je nabídnout rodině, učitelům a terapeutům použitelné přiblížení. Simulátor záměrně neukazuje třesoucí se obraz \u2014 achromati mají nystagmus (mimovolní pohyby očí), ale svět nevnímají jako pohybující se, protože jejich zraková kůra se vyvíjí společně s oscilujícím obrazem na sítnici. Nystagmus se projevuje dalším snížením ostrosti, což již zahrnuje posuvník Ostrost. Simulace je jinak záměrně jednoduchá (zatím například nemodeluje sníženou kontrastní citlivost) a je vhodná spíše jako východisko k rozhovoru, ne jako klinický nástroj.',
         aboutLearnMore: 'Více informací',
-        aboutLinkGard: 'NIH GARD: Achromatopsie (anglicky)',
-        aboutLinkNetwork: 'Achromatopsia Network (anglicky)',
+        aboutLink1Url: 'https://www.orpha.net/cs/disease/detail/49382',
+        aboutLink1Label: 'Orphanet: Achromatopsie',
+        aboutLink2Url: 'https://www.achromat.info/',
+        aboutLink2Label: 'Achromatopsia Network (anglicky)',
         aboutShare: 'Sdílet tento pohled',
         aboutShareCopied: 'Odkaz zkopírován',
         aboutShareFailed: 'Sdílení odkazu se nezdařilo',
@@ -1870,8 +1874,12 @@ void main() {
         document.getElementById('info-p2').textContent = t.aboutP2;
         document.getElementById('info-p3').textContent = t.aboutP3;
         document.getElementById('info-learn-more').textContent = t.aboutLearnMore;
-        document.getElementById('info-link-gard').textContent = t.aboutLinkGard;
-        document.getElementById('info-link-network').textContent = t.aboutLinkNetwork;
+        const link1 = document.getElementById('info-link-1');
+        const link2 = document.getElementById('info-link-2');
+        link1.href = t.aboutLink1Url;
+        link1.textContent = t.aboutLink1Label;
+        link2.href = t.aboutLink2Url;
+        link2.textContent = t.aboutLink2Label;
         if (!this._infoShareResetTimer) this.infoShareBtn.textContent = t.aboutShare;
         document.getElementById('label-gray-type').textContent = t.grayType;
         document.getElementById('label-language').textContent = t.langLabel;

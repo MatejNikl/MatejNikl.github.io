@@ -99,9 +99,14 @@ that honestly:
 
 Whichever route is taken, the UI copy must **not** suggest that the
 child sees the world moving — it should explain that nystagmus
-further blurs vision rather than destabilising it. Worth pairing
-with the Info / about overlay so the explanation lives next to the
-control.
+further blurs vision rather than destabilising it. The Info / About
+overlay now does that explicitly (calling out that achromats don't
+perceive the world as moving and that nystagmus contributes
+additional acuity loss already covered by the Blur control), which
+sets the right expectation; this entry is now about whether to model
+the directional / foveation-time component more precisely on top of
+the existing isotropic blur, not whether to introduce a "shake the
+canvas" effect (we will not).
 
 ### Contrast sensitivity loss — impact ★★★ · effort ★★
 
