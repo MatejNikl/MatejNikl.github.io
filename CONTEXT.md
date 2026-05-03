@@ -158,29 +158,28 @@ zero blur and increases as VA decreases. The constant K was calibrated consideri
 that convolved blur appears ~26% more degraded than equivalent natural optical
 blur (Artal et al.), so K was reduced from 0.4 to 0.3 to compensate.
 
-`getBlurSigma()` returns sigma in **CSS-display pixels** because that is the
-unit K was originally calibrated against (the legacy CSS engine uses it
-unchanged via `canvas.style.filter = 'blur(<sigma>px)'`). The shader engine
-needs a sigma in **internal-canvas pixels**: the canvas is laid out at
-`100vw / 100vh` with `object-fit: cover`, so one internal pixel renders as
-`max(clientW/w, clientH/h)` display pixels (cover takes the larger ratio so
-content fully fills the box). `getShaderBlurSigma()` divides by that scale
-factor — equivalently multiplies by `min(w/clientW, h/clientH)` — to keep the
-two engines visually equivalent across desktop, tablet, and phone layouts.
-Without this correction the shader looked 1.5–2x weaker on typical desktop
-viewports. A standalone edge-fitter happily reported the same effective sigma
-for both engines because both pipelines do operate at the *same* sigma — they
-just measure that sigma in different coordinate systems.
+K = 0.3 was originally calibrated against `filter: blur(N px)` on the
+`<canvas>` element, where N is in CSS-display pixels, so the natural unit of
+the formula is display pixels. The shader operates in **internal-canvas
+pixels**, and `getBlurSigma()` does the conversion in one step: the canvas is
+laid out at `100vw / 100vh` with `object-fit: cover`, so one internal pixel
+renders as `max(clientW/w, clientH/h)` display pixels (cover takes the larger
+ratio so content fully fills the box); the function divides the display-space
+sigma by that scale factor — equivalently multiplies by `min(w/clientW,
+h/clientH)` — to keep blur strength visually equivalent across desktop,
+tablet, and phone layouts. Without this correction the shader looked 1.5–2x
+weaker than the historical CSS reference on typical desktop viewports.
 
 ### Why a shader-based separable Gaussian?
 
 The earlier implementation applied `filter: blur()` to the `<canvas>` element
-in CSS. That worked fine on screen but lived purely in the browser's
-compositor — `canvas.toBlob` and `canvas.captureStream` see only the WebGL
-drawing buffer, so any saved photo or recorded frame would be missing the
-blur. Moving the blur into the GL pipeline keeps capture honest and gives
-deterministic quality across browsers (CSS `blur()` is implementation-defined,
-especially at the lower end of the radius range).
+in CSS. That works fine on screen but lives purely in the browser's
+compositor — `canvas.toBlob` sees only the WebGL drawing buffer, so any saved
+photo would be missing the blur. The blur runs in the GL pipeline so the
+captured PNG carries it, and so the output stays consistent across browsers
+(CSS `blur()` is implementation-defined, especially at the lower end of the
+radius range — two phones could produce visibly different blur for the same
+sigma, which is bad for a *simulator*).
 
 The pipeline is **downsample → small Gaussian → bilinear upsample**, the same
 strategy Skia uses on the GPU for non-trivial blur radii in `filter: blur()`.
@@ -238,11 +237,12 @@ identical to the non-blur path.
 
 ### Why not `ctx.filter`?
 
-`CanvasRenderingContext2D.filter` is **disabled by default** in Safari/WebKit on
-all iOS versions (including the latest 26.x), despite the feature being
-implemented. Apple keeps it behind a feature flag. Since all iOS browsers use
-WebKit, `ctx.filter` is silently ignored on every iOS browser, ruling it out as
-a portable alternative regardless of the capture concern above.
+`CanvasRenderingContext2D.filter` would have been the obvious 2D-canvas
+alternative to a shader pass, but it is **disabled by default** in
+Safari/WebKit on all iOS versions (including the latest 26.x), despite the
+feature being implemented. Apple keeps it behind a feature flag, and since
+all iOS browsers use WebKit, `ctx.filter` is silently ignored everywhere on
+iOS — ruling it out as a portable alternative.
 
 ## Saving photos
 
