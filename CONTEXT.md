@@ -51,10 +51,6 @@ Controls are anchored top-right unless noted.
     luminance in the shader) vs **Plain B&W** (Rec. 601) when grayscale is on.
   - **Language**: Dropdown — **System default**, **English**, or **Czech** (see
     **Language** paragraph above).
-  - **Shutter**: Logarithmic ET slider, shown when Glare is on. Adjusts the
-    manual exposure time from the ET floor (~250 µs) up to the camera's maximum.
-    When auto-exposure is active, the slider tracks the auto-computed ET and
-    a small "(auto)" label appears; touching the slider disables auto-exposure.
   - **Camera**: Dropdown listing rear cameras, only when more than one was
     detected after enumeration.
 
@@ -105,10 +101,12 @@ auto-exposure concept is physiologically sound but technically infeasible with
 current web APIs on most Android devices.
 
 What *does* work is `applyConstraints({ exposureMode: 'manual', exposureTime: X })`
-— setting an explicit manual ET value. The **Glare** control does this via a
-direct manual shutter (ET) slider. It cannot emulate the gradual rod saturation
-curve, but it lets the user force the camera to over-expose, which is useful for
-demonstrating what happens in bright light.
+— setting an explicit manual ET value. The **Glare** control does this, with
+the ET driven by a software auto-exposure controller (see "Software
+auto-exposure metering loop" below). It cannot emulate the gradual rod
+saturation curve, but the AE controller seeds at the ET floor and only
+lengthens ET in dim scenes, so bright scenes naturally over-expose — which is
+the wash-out we want.
 
 ## Scotopic grayscale conversion
 
@@ -347,11 +345,10 @@ with **ISO held fixed at 400** when the camera supports setting `iso` (clamped
 to `[iso.min, iso.max]` so odd hardware ranges still work). The **Glare**
 pill is hidden until `getCapabilities()` reports `exposureMode` including
 `manual` and a defined `exposureTime` range. It is **on by default** with
-**software auto-exposure** active, starting from the shortest ET (the ET
-floor) and adapting upward in dim lighting (see subsection below). A
-logarithmic **Shutter** slider in **Settings** lets the user override the
-auto-computed ET for more wash-out; touching the slider disables
-auto-exposure.
+**software auto-exposure** active, seeded at the ET floor and adapting
+upward in dim lighting (see subsection below). The pill is the only
+control: there is no manual shutter override — Glare on means "fixed ISO
++ AE-driven ET", Glare off means "let the camera handle exposure".
 
 **Why fixed ISO 400:** It matches the empirical calibration on the Samsung S22
 (f/1.8) used to derive `C_emp ≈ 30.86`. It is a sensible mid-gain default for
@@ -362,8 +359,8 @@ reading real-time ISO from `getSettings()` is unreliable on many Android
 browsers (often dummy values), so the app does not try to track or follow auto
 ISO in software.
 
-The **Shutter** slider's minimum is an **ET floor** derived so that, at the fixed
-ISO above, lengthening exposure from that point loosely aligns with "wash-out
+The AE controller's lower clamp is the **ET floor**, derived so that, at
+the fixed ISO above, exposure at the floor loosely aligns with "wash-out
 territory" around **~1000 lux** — the illuminance at which rod saturation
 overwhelms an achromat's vision in the model.
 
@@ -390,8 +387,9 @@ If the camera does not expose `iso` in capabilities, constraints send only
 `exposureTime`; the ET floor math still assumes **ISO 400** for the same
 calibration curve (the device's actual gain is then whatever the ISP applies).
 
-ET is clamped to hardware min/max; if `ET_floor` exceeds the hardware maximum,
-the slider range collapses toward the long-exposure end as a safety net.
+ET is clamped to hardware min/max; if `ET_floor` exceeds the hardware
+maximum, the seed and clamp collapse toward the long-exposure end as a
+safety net.
 
 ### Software auto-exposure metering loop
 
@@ -432,12 +430,6 @@ brightness is within 0.02 of the target, the controller does not adjust.
 This avoids flicker from chasing sensor noise while never stalling
 convergence when the scene actually needs adaptation — far from the
 target the error is large and the dead-band is irrelevant.
-
-**Interaction with the Shutter slider:** Auto-exposure is **on by default**
-whenever Glare is enabled. If the user manually moves the Shutter slider,
-auto-exposure is disabled and the slider value is used directly. Toggling
-Glare off and back on re-enables auto-exposure. A small "(auto)" label next
-to the Shutter label indicates when the loop is active.
 
 **Clamping preserves glare:** The ET floor remains the lower bound. In bright
 scenes the controller settles at or near the floor, producing the same

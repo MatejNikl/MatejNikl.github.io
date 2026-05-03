@@ -165,11 +165,6 @@
         <option value="cs">Czech</option>
       </select>
     </div>
-    <div id="et-row" class="settings-row" style="display:none">
-      <label id="label-shutter">Shutter <span id="et-auto" style="font-weight:400;opacity:0.6;font-size:10px">(auto)</span></label>
-      <input type="range" id="et-slider" min="1" max="100" value="1">
-      <span id="et-val" class="val">--</span>
-    </div>
     <div id="cam-row" class="settings-row" style="display:none">
       <label id="label-camera">Camera</label>
       <select id="cam-select"></select>
@@ -304,8 +299,6 @@ void main() {
         grayPlain: 'Plain B&W',
         camera: 'Camera',
         sharpness: 'Sharpness',
-        shutter: 'Shutter',
-        shutterAuto: '(auto)',
         errWebGL: 'WebGL not supported. Try Chrome or Safari.',
         errCameraUnsupported: 'Camera access not supported. Try Chrome or Safari.',
         errCameraFailed: 'Camera failed: {0}',
@@ -335,8 +328,6 @@ void main() {
         grayPlain: 'Obyčejná černobílá',
         camera: 'Kamera',
         sharpness: 'Ostrost',
-        shutter: 'Závěrka',
-        shutterAuto: '(auto)',
         errWebGL: 'WebGL není podporován. Zkuste Chrome nebo Safari.',
         errCameraUnsupported: 'Přístup ke kameře není podporován. Zkuste Chrome nebo Safari.',
         errCameraFailed: 'Kamera selhala: {0}',
@@ -392,9 +383,6 @@ void main() {
       btnFS: document.getElementById('btn-fs'),
       btnSettings: document.getElementById('btn-settings'),
       settingsPanel: document.getElementById('settings-panel'),
-      etRow: document.getElementById('et-row'),
-      etSlider: document.getElementById('et-slider'),
-      etVal: document.getElementById('et-val'),
       grayModeSelect: document.getElementById('gray-mode'),
       btnBlur: document.getElementById('btn-blur'),
       btnFreeze: document.getElementById('btn-freeze'),
@@ -405,7 +393,6 @@ void main() {
       camRow: document.getElementById('cam-row'),
       camSelect: document.getElementById('cam-select'),
       langSelect: document.getElementById('lang-select'),
-      etAutoSpan: document.getElementById('et-auto'),
       stream: null,
       track: null,
       rafId: null,
@@ -446,7 +433,6 @@ void main() {
       AE_TARGET: 0.35,
       AE_DAMPING: 0.15,
       AE_LUM_DEADBAND: 0.02,
-      autoET: true,
       _etApplyPending: false,
       _wakeLock: null,
       _resumePending: false,
@@ -710,7 +696,7 @@ void main() {
         this.uploadVideoTexture();
         this.renderFrame();
 
-        if (this.etOn && this.autoET && this.supportsET) {
+        if (this.etOn && this.supportsET) {
           if (++this.meterFrameCounter >= this.METER_EVERY_N) {
             this.meterFrameCounter = 0;
             const lum = this.meterLuminance();
@@ -1019,35 +1005,10 @@ void main() {
         return N * N * C_EMP * 1e6 / (E_OVERWHELM * iso);
       },
 
-      /** Effective slider <-> ET log-space range. Slider runs 1..100 (linear). */
-      getETSliderRange() {
-        const { min, max } = this.caps.exposureTime;
-        const effectiveMin = Math.min(Math.max(min, this.getETFloor()), max);
-        return { min, max, logMin: Math.log(effectiveMin), logMax: Math.log(max) };
-      },
-
-      getETFromSlider() {
-        if (!this.caps?.exposureTime) return 0;
-        const { min, max, logMin, logMax } = this.getETSliderRange();
-        const t = (parseInt(this.etSlider.value, 10) - 1) / 99;
-        const et = Math.round(Math.exp(logMin + t * (logMax - logMin)));
-        return Math.max(min, Math.min(max, et));
-      },
-
-      syncSliderToET(et) {
-        if (!this.caps?.exposureTime) return;
-        const { min, max, logMin, logMax } = this.getETSliderRange();
-        if (logMax <= logMin) { this.etSlider.value = 1; return; }
-        const clamped = Math.max(Math.exp(logMin), Math.min(max, et));
-        const t = (Math.log(clamped) - logMin) / (logMax - logMin);
-        this.etSlider.value = Math.round(1 + t * 99);
-      },
-
       /** Send a manual ET (and ISO when supported) to the camera. Tracks an
        *  in-flight flag so callers can avoid stacking constraint calls. */
       sendManualET(et, label) {
         this.manualET = et;
-        this.etVal.textContent = et + '\xB5s';
         const constraint = { exposureMode: 'manual', exposureTime: et };
         if (this.supportsISO) constraint.iso = this.getFixedISO();
         this._etApplyPending = true;
@@ -1056,9 +1017,14 @@ void main() {
           .finally(() => { this._etApplyPending = false; });
       },
 
+      /** Seed the AE controller. ETs at or below the floor produce the
+       *  glare wash-out at ~1000 lux; the controller raises ET above the
+       *  floor in dim scenes within ~1-2 s of metering. */
       async applyET() {
         if (!this.track || !this.caps?.exposureTime) return;
-        await this.sendManualET(this.getETFromSlider(), 'Manual ET');
+        const { min, max } = this.caps.exposureTime;
+        const seed = Math.max(min, Math.min(max, Math.round(this.getETFloor())));
+        await this.sendManualET(seed, 'Initial ET');
       },
 
       autoAdjustET(measured) {
@@ -1071,7 +1037,6 @@ void main() {
         const targetET = Math.max(etFloor, Math.min(max, currentET * ratio));
         const logNew = Math.log(currentET) + this.AE_DAMPING * (Math.log(targetET) - Math.log(currentET));
         const newET = Math.max(etFloor, Math.min(max, Math.round(Math.exp(logNew))));
-        this.syncSliderToET(newET);
         this.sendManualET(newET, 'Auto ET');
       },
 
@@ -1082,11 +1047,8 @@ void main() {
       },
 
       applyETUIState() {
-        const visible = this.supportsET && this.etOn;
         this.btnET.classList.toggle('hidden', !this.supportsET);
-        this.setPillState(this.btnET, visible);
-        this.etRow.style.display = visible ? 'flex' : 'none';
-        this.etAutoSpan.style.display = (visible && this.autoET) ? '' : 'none';
+        this.setPillState(this.btnET, this.supportsET && this.etOn);
       },
 
       async resetExposure() {
@@ -1104,7 +1066,6 @@ void main() {
 
       async toggleET() {
         this.etOn = !this.etOn;
-        this.autoET = this.etOn;
         if (this.etOn) this.meterFrameCounter = 0;
         this.applyETUIState();
         await (this.etOn ? this.applyET() : this.resetExposure());
@@ -1346,8 +1307,6 @@ void main() {
         document.getElementById('label-language').textContent = t.langLabel;
         document.getElementById('label-camera').textContent = t.camera;
         document.getElementById('label-sharpness').textContent = t.sharpness;
-        document.getElementById('label-shutter').childNodes[0].textContent = t.shutter + ' ';
-        if (this.etAutoSpan) this.etAutoSpan.textContent = t.shutterAuto;
         const optS = this.grayModeSelect.querySelector('option[value="scotopic"]');
         const optR = this.grayModeSelect.querySelector('option[value="rec601"]');
         if (optS) optS.textContent = t.grayScience;
@@ -1445,11 +1404,6 @@ void main() {
     sim.btnFS.addEventListener('click', () => sim.toggleFullscreen());
     sim.btnSettings.addEventListener('click', () => sim.toggleSettings());
     sim.camSelect.addEventListener('change', () => sim.onCameraSelectChange());
-    sim.etSlider.addEventListener('input', () => {
-      sim.autoET = false;
-      sim.applyETUIState();
-      sim.applyET();
-    });
     sim.blurSlider.addEventListener('input', () => sim.onBlurChange());
     sim.grayModeSelect.addEventListener('change', () => sim.onGrayModeChange());
     sim.langSelect.addEventListener('change', () => sim.onLanguageChange());
