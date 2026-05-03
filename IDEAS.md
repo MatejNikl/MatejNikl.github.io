@@ -25,12 +25,29 @@ Ratings are a rough hint, not gospel:
 These have the best impact-to-effort ratio and are concrete enough to
 pick up immediately.
 
+### Info / about overlay — impact ★★★ · effort ★★
+
+*Up next.* A small `(i)` pill (or a tap on the title) that opens a
+dismissible overlay explaining, in plain language, what
+achromatopsia is and what the app does — including what each toggle
+simulates and the (deliberate) limits of the simulation (no
+contrast-sensitivity loss yet, no nystagmus, etc.). Localised to
+EN/CS like the rest of the UI. Target audience (teachers,
+therapists, extended family) often does not know the terminology —
+this is the difference between "the screen looks weird" and "ah,
+*that's* what he sees", which is the whole point of the app. Worth
+re-rating from ★★ to ★★★ impact precisely because it's the bridge
+between the technical simulator and the people the simulator is
+*for*. Pair with the reproducibility URL: the overlay is the natural
+place to surface a Share button so a teacher can send the current
+view back to a parent.
+
 ### Hide controls on inactivity — impact ★★ · effort ★
 
 Auto-fade the pill row and slider after ~3 s of no interaction,
 revealing a clean edge-to-edge viewfinder. Any tap (or
 `pointermove`) brings them back. Especially valuable when the phone
-is held up for sustained viewing or recording.
+is held up for sustained viewing.
 
 ### Safe-area insets for notched phones — impact ★★ · effort ★
 
@@ -39,15 +56,6 @@ or Dynamic Island in landscape on recent iPhones / Pixels. Add
 `viewport-fit=cover` to the viewport meta and offset controls with
 `env(safe-area-inset-*)`. Trivial CSS-only change.
 
-### Info / about overlay — impact ★★ · effort ★★
-
-A small `(i)` pill (or a tap on the title) that opens a dismissible
-overlay explaining, in plain language, what achromatopsia is and what
-each toggle simulates. Localised to EN/CS like the rest of the UI.
-Target audience (teachers, therapists, extended family) often does
-not know the terminology — this is the difference between "the screen
-looks weird" and "ah, *that's* what he sees".
-
 ### Retry on camera-error toast — impact ★★ · effort ★
 
 Currently `errCameraFailed` is a static toast and the only escape is
@@ -55,6 +63,25 @@ a full reload. Make the toast itself tappable to re-run `start()`,
 and (when relevant) show a localized "Tap to retry" suffix. Cheap
 polish that prevents a dead-end on transient camera-busy errors,
 which are common on Android when another app held the camera.
+
+### Share-current-view button — impact ★★ · effort ★
+
+The reproducibility URL is already kept in `location.hash` on every
+change, but nothing surfaces it to the user — they have to know to
+copy from the address bar. A small share button (using `navigator.share`
+where available, falling back to `navigator.clipboard.writeText`)
+turns the existing infrastructure into a feature. Natural home is
+the Info / about overlay or next to the gear.
+
+### VA preset chips — impact ★ · effort ★
+
+The Sharpness slider is currently a bare 0.05–0.30 range; the value
+0.10 is meaningful (≈20/200, the typical achromat acuity) but
+nothing in the UI says so. Three small preset chips next to the
+slider (e.g. "20/200 · typical", "20/100 · mild", "20/40 · cone-ish")
+would make the control legible to non-clinicians without expanding
+the UI much. Could live in the Info overlay rather than the main
+viewfinder if space is a concern.
 
 ---
 
@@ -112,45 +139,6 @@ grayscale shader path so it's free per-pixel. Could either ride along
 the Blur toggle or sit as its own slider in **Settings**. This is
 arguably the most physiologically meaningful gap left in the
 simulation.
-
-### Linear-light blur — impact ★ · effort ★★
-
-The shader's separable Gaussian currently convolves **gamma-encoded
-sRGB** values, which is what CSS `filter: blur()` does on Chromium
-today (so the two engines stay calibrated against each other). A
-physically correct Gaussian convolves **linear-light** values
-(proportional to radiance) and only re-encodes to sRGB at the end:
-bright highlights bloom outward instead of dimming, and edges between
-bright and dark regions get a midtone that's brighter (correct) rather
-than darker (current).
-
-The plumbing is already there — `srgbToLinear` and `linearToSrgb` sit
-in `PREP_FRAG_SRC` for the grayscale luminance dot product. To make
-the whole pipeline linear: `srgbToLinear` at the prep stage, keep the
-mip / blur / upsample passes linear, then `linearToSrgb` in the final
-upsample-to-screen pass.
-
-Three reasons it's been deferred rather than done:
-
-1. **8-bit precision.** Linear values stored in an 8-bit RGBA texture
-   alias visibly in shadows. The clean fix needs an sRGB-aware
-   framebuffer (`EXT_sRGB` in WebGL 1, `GL_SRGB8_ALPHA8` in WebGL 2),
-   with feature detection and a gamma-blur fallback. Half-float FBOs
-   are an alternative but `OES_texture_half_float` + the matching
-   color-buffer extension aren't universally supported on phone GPUs.
-2. **Diverges from the CSS A/B reference.** We just calibrated the
-   shader to match `filter: blur()` within ~2 % across the whole VA
-   slider; switching to linear-light invalidates that match. The
-   "Blur engine" select in Settings would then visibly differ.
-3. **Marginal benefit for our content.** Achromatopsia simulation is
-   grayscale-dominant and indoor-ambient-scene-dominant; the linear /
-   gamma difference is most obvious on bright highlights against dark
-   backgrounds (sun, lamps, headlights), which is *not* the typical
-   demo case.
-
-Verdict: file as a "do it properly when we move to WebGL 2" item;
-gating on the sRGB FBO extension keeps it from becoming a regression
-on older GPUs.
 
 ### Scotopic adaptation latency — impact ★★ · effort ★
 
@@ -233,8 +221,13 @@ the most common iOS first-impression papercut.
 The app uses WebGL 1. WebGL 2 is now everywhere WebGL 1 is (Android
 Chrome forever, iOS Safari 15+). Benefits: `texStorage2D` for
 immutable textures, cleaner FBO setup, GLSL 300 es with proper
-integer types. Not urgent — the current code works — but would let
-the downsample pipeline drop a couple of guards.
+integer types and built-in `precision highp` defaults (which would
+remove the `FRAG_PRECISION` macro dance), and `SRGB8_ALPHA8` as a
+core internal format (which would remove the `EXT_sRGB` runtime
+extension lookup and the RGBA8 fallback path in `_allocFbo`). Not
+urgent — the current code works on every GPU we care about — but
+the rewrite would meaningfully shrink the shader-init code path
+and the precision/sRGB explainer comments around it.
 
 ### Battery / thermal-aware metering — impact ★ · effort ★★
 
@@ -264,6 +257,13 @@ For the historical record, these earlier ideas have shipped:
 - **Move blur to a shader pass** — replaced the CSS `filter: blur()`
   with a two-pass separable Gaussian shader. Required prerequisite
   for the photo / video items above.
+- **Linear-light blur** — the separable Gaussian now convolves
+  linear-light values rather than sRGB-encoded ones, with sRGB ↔
+  linear flips at the pipeline bookends. The 8-bit precision concern
+  that originally deferred this is solved by allocating the blur FBO
+  chain with `EXT_sRGB`-typed storage where supported (every modern
+  WebGL 1 device) and falling back to RGBA8 with linear bytes
+  otherwise. Documented in CONTEXT.md.
 - **Diagnostics overlay (`?debug=1`)** — top-left monospace HUD shows
   canvas vs viewport sizes (with DPR), blur sigma / downsample level /
   per-level sigma, FPS, current ET / ISO, last-measured luminance, and
