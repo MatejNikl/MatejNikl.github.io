@@ -25,6 +25,21 @@
       border-radius: 6px;
       display: none;
     }
+    #debug-hud {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      max-width: 60vw;
+      color: #fff;
+      background: rgba(0,0,0,0.6);
+      padding: 6px 10px;
+      font: 500 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      border-radius: 6px;
+      white-space: pre;
+      pointer-events: none;
+      z-index: 30;
+    }
+    #debug-hud[hidden] { display: none; }
     .controls {
       position: absolute;
       top: 10px;
@@ -140,6 +155,7 @@
   <video id="video" autoplay playsinline muted></video>
   <canvas id="canvas"></canvas>
   <div id="error" role="alert"></div>
+  <div id="debug-hud" role="status" aria-live="off" hidden></div>
   <div class="controls">
     <button type="button" id="btn-gray" class="pill on" aria-pressed="true" title="Turn off to see the camera in full color">Grayscale</button>
     <button type="button" id="btn-blur" class="pill on" aria-pressed="true">Blur</button>
@@ -378,6 +394,7 @@ void main() {
       video: document.getElementById('video'),
       canvas: document.getElementById('canvas'),
       errorDiv: document.getElementById('error'),
+      debugEl: document.getElementById('debug-hud'),
       btnGray: document.getElementById('btn-gray'),
       btnET: document.getElementById('btn-et'),
       btnFS: document.getElementById('btn-fs'),
@@ -438,6 +455,12 @@ void main() {
       _resumePending: false,
       _lastErrorKey: null,
       _lastErrorParams: null,
+      _debugOn: false,
+      _debugIntervalId: null,
+      _lastMeasuredLum: -1,
+      _fpsCount: 0,
+      _fpsT0: 0,
+      _fpsCurrent: 0,
 
       initGL() {
         const gl = this.canvas.getContext('webgl', { antialias: false, depth: false, stencil: false });
@@ -695,12 +718,16 @@ void main() {
 
         this.uploadVideoTexture();
         this.renderFrame();
+        this._fpsCount++;
 
         if (this.etOn && this.supportsET) {
           if (++this.meterFrameCounter >= this.METER_EVERY_N) {
             this.meterFrameCounter = 0;
             const lum = this.meterLuminance();
-            if (lum >= 0) this.autoAdjustET(lum);
+            if (lum >= 0) {
+              this._lastMeasuredLum = lum;
+              this.autoAdjustET(lum);
+            }
           }
         }
 
@@ -1227,6 +1254,66 @@ void main() {
         return sigmaDisplay * mult;
       },
 
+      /** Activate the diagnostics HUD when ?debug=1 is in the URL. The
+       *  flag is read once at boot; toggling it requires a reload. The
+       *  HUD updates at ~1 Hz, which is plenty for human-readable
+       *  numbers and avoids piling work on every frame. FPS is computed
+       *  from a per-second sliding window seeded from processFrame. */
+      initDebug() {
+        const params = new URLSearchParams(window.location.search);
+        const v = params.get('debug');
+        const on = v !== null && v !== '0' && v.toLowerCase() !== 'false';
+        if (!on) return;
+        this._debugOn = true;
+        this._fpsT0 = performance.now();
+        this.debugEl.hidden = false;
+        this.updateDebugHUD();
+        this._debugIntervalId = setInterval(() => this.updateDebugHUD(), 1000);
+      },
+
+      /** Refresh the diagnostics HUD content. Lines that don't apply to
+       *  the current capability set (Glare on iOS, ISO on cameras that
+       *  don't expose it) are silently skipped so the HUD stays terse. */
+      updateDebugHUD() {
+        if (!this._debugOn) return;
+        const now = performance.now();
+        const elapsed = now - this._fpsT0;
+        if (elapsed >= 500) {
+          this._fpsCurrent = (this._fpsCount * 1000) / elapsed;
+          this._fpsCount = 0;
+          this._fpsT0 = now;
+        }
+
+        const c = this.canvas;
+        const dpr = window.devicePixelRatio || 1;
+        const sigma = (this.blurOn && this.blurSrcFbos.length) ? this.getBlurSigma() : 0;
+        const lines = [];
+        lines.push(`canvas ${c.width}x${c.height} / css ${c.clientWidth}x${c.clientHeight} (DPR ${dpr.toFixed(2)})`);
+        if (this.blurOn && sigma > 0) {
+          const level = this._pickBlurLevel(sigma);
+          const sigmaAtLevel = sigma / (1 << level);
+          const lw = Math.max(1, c.width >> level), lh = Math.max(1, c.height >> level);
+          lines.push(`blur VA=${this.blurVA.toFixed(3)} \u03c3=${sigma.toFixed(2)}px L=${level} (${lw}x${lh}) \u03c3@L=${sigmaAtLevel.toFixed(2)}`);
+        } else {
+          lines.push(`blur off`);
+        }
+        lines.push(`fps ${this._fpsCurrent.toFixed(1)}`);
+        if (this.supportsET) {
+          const et = this.manualET ? `${this.manualET}\u00b5s` : 'pending';
+          const iso = this.supportsISO ? `ISO ${this.getFixedISO()}` : 'ISO n/a';
+          lines.push(`glare ${this.etOn ? 'on' : 'off'} \u00b7 ET ${et} \u00b7 ${iso}`);
+          if (this.etOn && this._lastMeasuredLum >= 0) {
+            lines.push(`lum ${this._lastMeasuredLum.toFixed(3)} target ${this.AE_TARGET.toFixed(2)}`);
+          }
+        }
+        const cam = this.cameras[this.cameraIndex];
+        if (cam) {
+          const label = cam.label || `camera ${this.cameraIndex}`;
+          lines.push(`cam ${label}`);
+        }
+        this.debugEl.textContent = lines.join('\n');
+      },
+
       initFullscreen() {
         const fsEnabled = document.fullscreenEnabled || document.webkitFullscreenEnabled;
         if (!fsEnabled) return;
@@ -1395,6 +1482,7 @@ void main() {
     sim.restorePrefs();
     sim.applyLocale();
     sim.initFullscreen();
+    sim.initDebug();
 
     sim.btnGray.addEventListener('click', () => sim.toggleGrayscale());
     sim.btnET.addEventListener('click', () => sim.toggleET());

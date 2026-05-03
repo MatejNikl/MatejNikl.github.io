@@ -208,14 +208,6 @@ portrait. On first visit in portrait, briefly show a hint suggesting
 landscape for a wider field of view. Dismissable, locale-aware,
 remembered in prefs.
 
-### Diagnostics overlay (`?debug=1`) — impact ★ · effort ★★
-
-A small monospace HUD showing measured luminance, current ET, ISO
-(when available), camera resolution, and FPS, gated behind a
-URL parameter. Invaluable for calibrating `C_EMP` on a new device
-without rebuilding, and for anyone debugging AE behaviour in the
-field. Zero impact when the param isn't set.
-
 ---
 
 ## Technical / robustness
@@ -280,3 +272,7 @@ For the historical record, these earlier ideas have shipped:
 - **Move blur to a shader pass** — replaced the CSS `filter: blur()`
   with a two-pass separable Gaussian shader. Required prerequisite
   for the photo / video items above.
+- **Diagnostics overlay (`?debug=1`)** — top-left monospace HUD shows
+  canvas vs viewport sizes (with DPR), blur sigma / downsample level /
+  per-level sigma, FPS, current ET / ISO, last-measured luminance, and
+  active camera. Read once at boot, updates at 1 Hz, English-only.

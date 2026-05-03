@@ -286,6 +286,39 @@ these constraints, most mobile browsers default to 640×480.
 The canvas is sized to `video.videoWidth` × `video.videoHeight` from the active
 stream; that size is not displayed on the page.
 
+## Diagnostics overlay
+
+Adding `?debug=1` to the URL turns on a small monospace HUD at the top
+left of the viewport. It is a developer affordance, not a user feature:
+no UI exists to toggle it, the strings are English-only, and the flag is
+read once at boot (toggling it requires a reload). With the flag off the
+overlay is completely inert — no hidden DOM updates, no `setInterval`.
+
+What it shows, terse one line each:
+
+- `canvas WxH / css cwxch (DPR d)` — internal canvas resolution vs the
+  CSS layout box the browser is painting it into. The ratio drives the
+  cover-scale used by `getBlurSigma`.
+- `blur VA=v σ=s.spx L=n (lwxlh) σ@L=k.kk` — only when blur is on.
+  Internal-pixel sigma, the chosen downsample level, and the per-level
+  blur sigma. Together these explain how aggressively the FBO chain is
+  shrinking before the Gaussian, which is the main lever on visible
+  upsample-grid artifacts. `blur off` when the toggle is off.
+- `fps n.n` — sliding-window FPS measured in `processFrame`. Useful for
+  spotting throttling or thermal slowdown during long demos.
+- `glare on/off · ET <µs> · ISO <iso>` — only when the camera supports
+  manual exposure. Replaces the role the old Shutter slider used to
+  serve (showing the current ET).
+- `lum <measured> target <target>` — only when Glare is on. Lets you
+  sanity-check that the AE controller is converging toward the target.
+- `cam <label>` — active camera label. Matters on multi-camera phones
+  to confirm the right rear lens was picked.
+
+The HUD updates at ~1 Hz. FPS is computed from a frame counter that
+`processFrame` increments unconditionally; the counter is reset every
+update so it costs one integer increment per rAF when the flag is off
+(measurable as zero).
+
 ## PWA / Add to Home Screen
 
 A `manifest.json` with `"display": "fullscreen"` allows users to install
