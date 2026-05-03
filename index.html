@@ -547,6 +547,18 @@ void main() {
         if (!gl) return false;
         this.gl = gl;
 
+        // EXT_sRGB lets us allocate the blur FBO chain with sRGB-typed
+        // storage: writes from the shader are auto-encoded to sRGB on
+        // store; reads are auto-decoded to linear on sample. Storage
+        // stays 8-bit but we no longer round linear values into 8-bit
+        // memory, so dark regions don't band. Without the extension we
+        // fall back to RGBA8 storing linear values directly, which is
+        // colorimetrically the same blur but loses 1-2 bits of
+        // resolution in dark gradients. The extension is present on
+        // all modern browsers / GPUs we care about; the fallback is
+        // there for completeness.
+        this.srgbExt = gl.getExtension('EXT_sRGB');
+
         // One full-screen quad shared by every program; bound once and
         // never rebound since nothing else touches ARRAY_BUFFER.
         const quad = new Float32Array([-1,-1, 1,-1, -1,1, 1,1]);
@@ -673,16 +685,44 @@ void main() {
 
       _allocFbo(w, h) {
         const gl = this.gl;
+        // Use sRGB-typed storage when EXT_sRGB is available so the
+        // hardware does sRGB <-> linear conversion at the framebuffer
+        // boundary (write linear from shader, store as sRGB; sample
+        // and get linear back). The shader code is identical either
+        // way -- it always reads/writes linear values -- only the
+        // texture's storage format differs. Per the EXT_sRGB spec,
+        // internalformat must equal format for the sRGB types, and
+        // the bilinear MIN_FILTER / MAG_FILTER then also blends in
+        // linear space (the texels are decoded before filtering),
+        // which is what we want for both the box-filter downsample
+        // and the kernel's bilinear taps.
+        const fmt = this.srgbExt ? this.srgbExt.SRGB_ALPHA_EXT : gl.RGBA;
         const tex = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, tex);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texImage2D(gl.TEXTURE_2D, 0, fmt, w, h, 0, fmt, gl.UNSIGNED_BYTE, null);
         const fbo = gl.createFramebuffer();
         gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
         gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+        // sRGB framebuffer attachments are technically allowed to
+        // fail FBO completeness on some implementations; if that
+        // happens, fall back to RGBA storage and reallocate. We do
+        // the check on the first FBO of the chain only to avoid
+        // burning per-allocation status calls.
+        if (this.srgbExt && this.blurSrcFbos.length === 0 && this.blurPingFbos.length === 0) {
+          const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+          if (status !== gl.FRAMEBUFFER_COMPLETE) {
+            console.warn('EXT_sRGB framebuffer not complete (status', status + '); falling back to RGBA storage');
+            gl.deleteTexture(tex);
+            gl.deleteFramebuffer(fbo);
+            this.srgbExt = null;
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            return this._allocFbo(w, h);
+          }
+        }
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         return { tex, fbo, w, h };
       },
