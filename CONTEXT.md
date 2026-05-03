@@ -187,13 +187,49 @@ Downsampling first lets us keep that same small kernel and still cover any
 radius — at half resolution one full-res sigma costs half a kernel pixel.
 
 ```
-videoTex --(prep: grayscale + flipY)----------> srcFbo[0]    full res
+videoTex --(prep PRE_BLUR: linearise + flipY)-> srcFbo[0]    full res
 srcFbo[0] --(passthrough, LINEAR filter)------> srcFbo[1]    half res
 srcFbo[1] --(passthrough, LINEAR filter)------> srcFbo[2]    quarter res
 srcFbo[L] --(blur H, σ_at_level)--------------> pingFbo[L]   L-level res
 pingFbo[L] --(blur V, σ_at_level)-------------> srcFbo[L]    L-level res
-srcFbo[L] --(passthrough, MAG_FILTER bilinear)> default framebuffer (screen)
+srcFbo[L] --(prep POST_BLUR: gray + sRGB)-----> default framebuffer (screen)
 ```
+
+The pipeline is **linear-light throughout the blur**. The prep
+shader has four modes selected by a `uMode` uniform:
+
+- `DIRECT` — sRGB in, optional grayscale, sRGB out. Used only when
+  blur is off; collapses the whole pipeline to one pass.
+- `PRE_BLUR` — sRGB in, linearise via the IEC 61966-2-1 transfer
+  function, write linear. Entry point of the blur pipeline.
+- `PASSTHROUGH` — copy with optional flipY, no encoding flips.
+  Used between FBOs in the downsample chain so they stay linear.
+- `POST_BLUR` — linear in, optional grayscale (in linear space for
+  the colorimetric `scotopic` weighting; or via a re-encode for
+  the perceptual `plain` Rec. 601 weighting), sRGB-encode, write
+  sRGB to the default framebuffer.
+
+Doing the convolution on linear values is what makes glare halos
+and bright-against-dark transitions look right. Averaging
+sRGB-encoded values darkens the average artificially because sRGB
+is a perceptual encoding, not a physical-light one. CSS
+`filter: blur()` averages sRGB; we don't, and that's the main
+reason this is a custom shader rather than a CSS filter.
+
+**FBO storage uses `EXT_sRGB` when available** so the intermediate
+buffers hold sRGB-encoded values (perceptually uniform 8-bit
+quantisation) while the shader still operates on linear values.
+The hardware does the encode/decode at the framebuffer boundary —
+shader writes linear, GPU stores sRGB; shader reads, GPU returns
+linear. This also makes the bilinear `MIN_FILTER` /
+`MAG_FILTER` blends linear-correct (the spec says decoding happens
+before filtering on sRGB-typed textures), so the box-filter
+downsample and the kernel's bilinear taps are also colorimetrically
+right. Without `EXT_sRGB` the FBOs are plain RGBA8 holding linear
+values — same algorithm, but smooth dark gradients band more
+because linear 8-bit wastes precision in the dark region. The
+extension is supported on essentially every WebGL 1 device since
+2013.
 
 **Design discipline (taken from Skia):** the blur shader is
 *single-resolution*. Both H and V passes have src and dst at the
@@ -216,18 +252,20 @@ Skia avoids the whole class of bug by simply never crossing
 resolutions inside the blur shader — and does its resize as a
 separate generic pass — and we follow suit.
 
-The downsample step is just the prep shader rebound to render an
-FBO into a half-size FBO; with `MIN_FILTER = LINEAR`, sampling at
-the centre of every 2×2 source block averages four pixels for free,
-which is the box filter we want to suppress aliasing of any
-high-frequency detail beyond the per-level Nyquist limit.
+The downsample step is just the prep shader rebound (in
+`PASSTHROUGH` mode) to render an FBO into a half-size FBO; with
+`MIN_FILTER = LINEAR`, sampling at the centre of every 2×2 source
+block averages four pixels for free, which is the box filter we
+want to suppress aliasing of any high-frequency detail beyond the
+per-level Nyquist limit.
 
-The final upsample is again the prep shader bound as a passthrough,
+The final upsample is the prep shader bound in `POST_BLUR` mode,
 sampling `srcFbo[L]` with hardware bilinear `MAG_FILTER` into the
-default framebuffer. That's a naive bilinear stretch — cheap and
-usually fine for `L ≤ 2`. Browsers do something similar; iOS Safari
-and Skia both rely on their downsample factor staying small so a
-plain bilinear upsample is invisible.
+default framebuffer. That's a naive bilinear stretch combined with
+the grayscale + sRGB-encode work — cheap and usually fine for
+`L ≤ 2`. Browsers do something similar; iOS Safari and Skia both
+rely on their downsample factor staying small so a plain bilinear
+upsample is invisible.
 
 The blur shader (`BLUR_FRAG_SRC`) does a separable Gaussian using
 **bilinear-tap sampling**: each off-centre fetch is a bilinear
