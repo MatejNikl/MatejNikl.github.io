@@ -261,8 +261,18 @@ void main() {
     // a static loop bound is simpler than a dynamic one and the
     // wasted work is well below the noise floor at this kernel size).
     const MAX_BLUR_TAPS_HALF = 6;
-    const BLUR_FRAG_SRC = `
-precision mediump float;
+    // Precision matters here: the final V pass crosses resolutions
+    // (sources at L-level, renders at full canvas), so vTexCoord at
+    // adjacent output rows differs by a fraction of a source texel.
+    // At mediump (16-bit half-float on phones) those tiny deltas
+    // quantize to the same value across runs of adjacent output rows,
+    // and you get visible horizontal banding wherever the quantized
+    // bucket boundary falls. highp keeps the deltas distinct. Fragment-
+    // shader highp is optional in WebGL 1, but supported on every GPU
+    // we actually care about; the call site feature-detects and falls
+    // back to mediump on the rare device without it.
+    const BLUR_FRAG_SRC = (precision) => `
+precision ${precision} float;
 uniform sampler2D uSrc;
 uniform vec2 uTexelStep;
 uniform float uWeights[${MAX_BLUR_TAPS_HALF + 1}];
@@ -494,10 +504,16 @@ void main() {
         const vs = this._compileShader(gl.VERTEX_SHADER, VERT_SRC, 'Vertex shader');
         if (!vs) return false;
 
+        const highp = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT);
+        const blurPrecision = (highp && highp.precision > 0) ? 'highp' : 'mediump';
+        if (blurPrecision !== 'highp') {
+          console.warn('Fragment-shader highp unavailable; blur may show banding on cross-resolution passes.');
+        }
+
         const prep = this._buildProgram(vs, PREP_FRAG_SRC, 'Prep',
           ['uSrc', 'uGrayscale', 'uGrayMode', 'uFlipY']);
         if (!prep) return false;
-        const blur = this._buildProgram(vs, BLUR_FRAG_SRC, 'Blur',
+        const blur = this._buildProgram(vs, BLUR_FRAG_SRC(blurPrecision), 'Blur',
           ['uSrc', 'uTexelStep', 'uWeights', 'uOffsets']);
         if (!blur) return false;
         const ds = this._buildProgram(vs, DS_FRAG_SRC, 'Downsample',
